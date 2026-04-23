@@ -1,0 +1,29 @@
+{
+  "factual": [
+    "The capital of France is",
+    "The chemical formula for water is",
+    "The largest planet in our solar system is",
+    "The speed of light is approximately",
+    "The first president of the United States was"
+  ],
+  "math": [
+    "2 + 2 =",
+    "The square root of 144 is",
+    "If x = 5, then 2x + 3 ="
+  ],
+  "code": [
+    "def hello_world():\n    print(",
+    "for i in range(10):\n    ",
+    "import os\nfiles = os.listdir("
+  ],
+  "pattern": [
+    "The cat sat on the",
+    "Once upon a time there was a",
+    "Roses are red, violets are"
+  ],
+  "reasoning": [
+    "The sun appears yellow because",
+    "Water boils at 100 degrees because",
+    "Birds can fly because they have"
+  ]
+}
