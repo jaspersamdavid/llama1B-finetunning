@@ -111,32 +111,6 @@ Use latest stable PyTorch (2.5+, MPS built in). Python 3.11.x or 3.12.x.
 
 ---
 
-## Hardware & Acceleration (Mac Mini M4)
-
-Summary: use the Apple GPU via PyTorch's MPS backend. 10-core M4 GPU ≈ 3–5× faster than CPU; 16GB unified memory makes CPU↔GPU moves free. FP16 is well supported; skip `torch.compile` on MPS for now.
-
-### Device setup (used everywhere in this project)
-```python
-import torch
-
-def pick_device():
-    if torch.backends.mps.is_available():
-        return "mps"
-    if torch.cuda.is_available():
-        return "cuda"
-    return "cpu"
-
-device = pick_device()   # "mps" on this Mac Mini
-model = model.to(device)
-```
-
-### Env var (in `~/.zshrc`)
-```bash
-export PYTORCH_ENABLE_MPS_FALLBACK=1
-```
-
----
-
 ## Test Prompts
 
 Used consistently across all experiments for fair comparison.
@@ -177,41 +151,30 @@ TEST_PROMPTS = {
 
 ## Daily Task Plan
 
-### Day 1 — Thursday, April 23, 2026
+### Day 1 — Thursday, April 23, 2026 ✅ COMPLETED (finished April 24)
 **Phase 0: Mac Mini Environment Bootstrap + Project Setup + Understanding Tokenization**
 
-**Mac Mini bootstrap (one-time, because this machine is fresh):**
-- [x] Clone repo onto Mac Mini (done — files already present at `~/projects/llama1B-finetunning/`)
-- [x] Install pyenv: `brew install pyenv` (v2.6.27) — pyenv init block added to `~/.zshrc`
-- [x] Install Python 3.11.9: `pyenv install 3.11.9` then `pyenv local 3.11.9` (`.python-version` pinned at project root)
-- [x] Create venv: `python3 -m venv venv` (activate via `source venv/bin/activate` when working interactively; Claude Code uses `./venv/bin/python` directly since shell state doesn't persist across tool calls)
-- [x] Install deps: `./venv/bin/pip install -r requirements.txt` — got torch 2.11.0, transformers 5.6.2, huggingface_hub 1.11.0, jupyter, scikit-learn, matplotlib, seaborn, pandas, numpy
-- [x] Verify MPS works: `torch.backends.mps.is_available() == True` on torch 2.11.0
-- [x] Add `export PYTORCH_ENABLE_MPS_FALLBACK=1` to `~/.zshrc`
-- [x] HF access: account created, Llama 3.2 1B access approved
-- [x] Log in with new CLI: `hf auth login` — token `llama-xray-mac-mini` saved (Read scope)
-- [x] Update `src/inspector/model_loader.py` — added `pick_device()` helper (MPS → CUDA → CPU) and made `device=None` auto-pick MPS
+> Full task checklist archived in `completeness.md`. Summary below is what future-Claude
+> needs to know about the state of the project after Day 1.
 
-**Project setup (largely done on MacBook — in-repo files carry over):**
-- [x] Create project directory structure (as defined above)
-- [x] Create `requirements.txt` (dependencies re-installed fresh in the Mac Mini venv — done in bootstrap above)
-- [x] Download Llama 3.2 1B FP16 (auto-downloaded into `~/.cache/huggingface/`, ~2GB)
-- [x] Write `model_loader.py` — loads model with `output_hidden_states=True` and `output_attentions=True`; now also handles MPS auto-select
-- [x] Run `print(model)` — full architecture seen: 16 `LlamaDecoderLayer`s, each with self_attn (q/k/v/o_proj) + mlp (gate/up/down_proj with SwiGLU) + 2 RMSNorms; plus embed_tokens (128256 × 2048), final norm, lm_head
-- [x] Run `print(model.config)` — documented: num_hidden_layers=16, hidden_size=2048, num_attention_heads=32, num_key_value_heads=8 (GQA), intermediate_size=8192, vocab_size=128256, max_position_embeddings=131072
-- [x] **Learn: Tokenization** — notebook section covers:
-  - Text → token IDs: `tokenizer.encode("Why is the sun yellow")` → `[128000, 10445, 374, 279, 7160, 14071]`
-  - Token IDs → text: `tokenizer.decode([...])`
-  - Vocabulary: 128,256 entries via `tokenizer.get_vocab()`
-  - Subword: `"understanding"` → `["under", "standing"]`, `"pneumonia"` → `["p", "neum", "onia"]`
-- [x] Run one simple generation to confirm everything works: `"The capital of France is"` → coherent output about Eiffel Tower, Louvre, etc.
-- [x] **Concept note:** Wrote the "Transformer" and "Tokenization" entries in `LLMXray.md`
-- [ ] Commit: "Day 1: Project setup, model loaded, tokenization understood"
+**State after Day 1:**
+- **Environment ready:** pyenv 2.6.27, Python 3.11.9 pinned, `./venv/` with torch 2.11.0 + transformers 5.6.2 + huggingface_hub 1.11.0 + full Jupyter/ML stack installed. MPS verified working. `PYTORCH_ENABLE_MPS_FALLBACK=1` in `~/.zshrc`.
+- **HF auth done:** account active, Llama 3.2 1B access approved, Read token `llama-xray-mac-mini` saved. `HF_HOME=~/models/hf-weights` in `~/.zshrc` — all HF models land there (not the default `~/.cache/huggingface/`).
+- **Model loaded successfully on MPS:** `./venv/bin/python -m src.inspector.model_loader` runs end-to-end. Loads in ~3s from `~/models/hf-weights/` after the initial download. `pick_device()` helper in `src/inspector/model_loader.py` auto-selects MPS → CUDA → CPU.
+- **Architecture documented** (committed to memory via `LLMXray.md`): 16 `LlamaDecoderLayer`s stacked. Each layer = `self_attn` (q/k/v/o_proj) + `mlp` (gate/up/down_proj, SwiGLU) + 2 RMSNorms. Plus `embed_tokens` (128256 × 2048) at start and `lm_head` at end. Config: hidden=2048, heads=32, KV heads=8 (Grouped Query Attention), MLP intermediate=8192, vocab=128256, max_position=131072. Total ≈ 1.24B params FP16.
+- **Tokenization understood** (write-up in `LLMXray.md`): Llama uses BPE subword tokenization over a 128,256-token vocab. `<|begin_of_text|>` (id 128000) is prepended automatically. Common words are one token (`"Paris"`, `"hello"`); rare words split (`"understanding"` → `["under", "standing"]`, `"pneumonia"` → `["p", "neum", "onia"]`). Leading spaces are part of tokens (` is`, ` the`).
+- **Sanity check passed:** generating from `"The capital of France is"` produces coherent English about the Eiffel Tower and Louvre.
 
-**Understanding goal for Day 1:**
-> By end of day, you should be able to explain: what a token is, how text becomes numbers,
-> what the model's architecture looks like (16 layers stacked), and what each layer contains
-> (attention + MLP). You don't need to understand HOW they work yet — just WHAT the pieces are.
+**Deliverables checked into the repo:**
+- `src/inspector/model_loader.py` — MPS-aware loader with `pick_device()`
+- `notebooks/01_model_anatomy.ipynb` — executed end-to-end, outputs saved in the notebook JSON
+- `LLMXray.md` — **Transformer** and **Tokenization** sections filled in with concrete numbers
+- Committed as `b9a5df2` on `main`
+
+**Understanding goal for Day 1 (met):**
+> Able to explain: what a token is, how text becomes numbers, what the model's architecture
+> looks like (16 layers stacked), what each layer contains (attention + MLP). Don't need to
+> understand HOW they work yet — just WHAT the pieces are.
 
 ---
 
@@ -756,7 +719,7 @@ TEST_PROMPTS = {
 - [ ] `pip install -r requirements.txt` — this picks up current stable PyTorch (2.5+) with MPS built in. Do NOT pin to 2.2.2.
 - [ ] Verify MPS: `python -c "import torch; print(torch.backends.mps.is_available())"` → must print `True`
 - [ ] Add `export PYTORCH_ENABLE_MPS_FALLBACK=1` to `~/.zshrc`, then `source ~/.zshrc`
-- [ ] Update `src/inspector/model_loader.py` to move the loaded model to `"mps"` device (see Hardware & Acceleration section above for the `pick_device()` pattern)
+- [ ] Update `src/inspector/model_loader.py` to auto-pick MPS (use a `pick_device()` helper: MPS → CUDA → CPU)
 
 ### Accounts & Access (MUST do before running)
 - [ ] **Hugging Face account** — needed to download Llama 3.2 1B
