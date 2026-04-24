@@ -1,6 +1,7 @@
 # CLAUDE.md — llama-xray
 
 > **Living document. Update after every completed task.**
+> Key Concepts Reference lives in `LLMXray.md` — fill it in as concepts are learned.
 
 ---
 
@@ -8,99 +9,44 @@
 
 **Name:** llama-xray
 **Model:** Llama 3.2 1B (FP16, ~2GB)
-**Machine:** Intel i5 Mac, 8GB RAM, no GPU
-**Duration:** 15 working days (April 10 – April 30, 2026, excluding weekends)
+**Machine:** Mac Mini M4 — 10-core CPU, 10-core GPU, 16GB unified memory (PyTorch MPS backend for GPU acceleration)
+**Duration:** 15 working days (April 23 – May 13, 2026, excluding weekends)
 **Repository:** `llama-xray/`
 
----
+### Goals
 
-## Project Goals
-
-### Primary Goals
-
-1. **Understand how LLMs work — top to bottom, like a PhD but explained simply**
-   - What is a transformer? What are layers, attention, embeddings, feed-forward networks?
-   - How does text become numbers (tokenization → embeddings)?
-   - How do those numbers flow through layers to produce the next word?
-   - What is the attention mechanism really doing — Q, K, V, multi-head, all of it?
-   - What is the KV cache, why does it exist, and how does it speed up generation?
-   - What are weights? What do they store? How were they trained?
-   - How does the model "know" facts — where is knowledge stored in the weights?
-   - What is backpropagation, loss, gradient descent — the training loop explained simply?
-   - What is LoRA, quantization, fine-tuning — how do people modify these models?
-   - None of this should require prior ML knowledge. Every concept is explained from scratch.
-
-2. **Layer Pruning (Track A):**
-   - Can we remove layers and still get correct answers?
-   - Start at 16 layers, remove one at a time
-   - Find the minimum number of layers that maintains 75%+ quality
-   - Understand WHY certain layers matter and others don't
-
-3. **KV Cache Optimization (Track B):**
-   - Can we reduce the tokens the model stores during generation?
-   - Target: 5% less token compute for equivalent output quality
-   - Understand which cached tokens are actually useful vs wasted space
-   - Build and test eviction strategies
-
-4. **Build a reusable inspection toolkit:**
-   - Logit lens (see predictions at each layer)
-   - Attention maps (see which words look at which)
-   - Embedding explorer (see how the model understands word relationships)
-   - KV cache profiler (measure cache size and usage)
-   - Weight tweaker (modify weights live, see immediate impact)
-
-5. **Portfolio piece:**
-   - Interactive dashboard showing all findings
-   - Written report with clear visualizations
-   - Techniques that transfer to larger models (3B, 7B, 70B+)
+1. **Understand how LLMs work — top to bottom, explained simply.** No prior ML knowledge required. Concepts are written up in `LLMXray.md` as we learn them.
+2. **Track A — Layer Pruning:** find the minimum number of layers that maintains 75%+ quality, and understand which layers matter.
+3. **Track B — KV Cache Optimization:** reduce token compute by 5%+ for equivalent output quality.
+4. **Build a reusable inspection toolkit:** logit lens, attention maps, embedding explorer, KV cache profiler, weight tweaker.
+5. **Portfolio piece:** interactive dashboard + written report, techniques that transfer to 3B/7B/70B models.
 
 ---
 
 ## Current Status
 
-> **Last updated:** April 11, 2026
-> **Currently working on:** Day 1 — Project Setup (in progress)
-> **Last completed task:** Directory structure, model_loader.py, notebook, dependencies installed
-> **Next task:** Hugging Face access + download model + run notebook
-
----
-
-## Key Concepts Reference
-
-> This section gets filled in as we learn each concept. Written in plain language, no jargon.
-
-### Transformer
-> [To be filled — Day 1-2]
-
-### Tokenization
-> [To be filled — Day 1]
-
-### Embeddings
-> [To be filled — Day 3]
-
-### Attention (Q, K, V)
-> [To be filled — Day 2]
-
-### Multi-Head Attention
-> [To be filled — Day 2]
-
-### Feed-Forward Network (MLP)
-> [To be filled — Day 2]
-
-### KV Cache
-> [To be filled — Day 3-4]
-
-### Logit Lens
-> [To be filled — Day 2]
-
-### Backpropagation & Training
-> [To be filled — as needed]
-
-### LoRA & Fine-tuning
-> [To be filled — as needed]
-
-### Quantization
-> [To be filled — Day 11]
+> **Last updated:** April 24, 2026
+> **Currently working on:** Day 1 (Mac Mini) — Environment bootstrap done; blocked on Hugging Face access approval for Llama 3.2 1B.
+>
+> **Done today:**
+> - `brew install pyenv` (v2.6.27) + pyenv init in `~/.zshrc`
+> - `pyenv install 3.11.9` + `pyenv local 3.11.9` (`.python-version` pinned)
+> - `python -m venv venv` created at project root
+> - `pip install -r requirements.txt` — got `torch 2.11.0`, `transformers 5.6.2`, `huggingface_hub 1.11.0`, full Jupyter stack, scikit-learn, matplotlib, seaborn, pandas, numpy
+> - MPS verified: `torch.backends.mps.is_available() == True` on torch 2.11.0
+> - `export PYTORCH_ENABLE_MPS_FALLBACK=1` added to `~/.zshrc`
+> - `src/inspector/model_loader.py` updated: added `pick_device()` helper (MPS → CUDA → CPU) and made `device=None` auto-pick MPS on this Mac Mini
+>
+> **Pending — pick up here:**
+> 1. Create a Hugging Face account at https://huggingface.co/join
+> 2. Request access to Llama 3.2 1B at https://huggingface.co/meta-llama/Llama-3.2-1B (Meta approval — usually minutes, can be up to a day)
+> 3. Create a **Read** token at https://huggingface.co/settings/tokens (name it `llama-xray-mac-mini` or similar)
+> 4. Log in: `./venv/bin/hf auth login --token hf_...` (note: `huggingface-cli` is deprecated; the new command is `hf`)
+> 5. Run `python -m src.inspector.model_loader` — this will download Llama 3.2 1B FP16 (~2GB) into `~/.cache/huggingface/` on first run, print model architecture, config, and a test generation
+> 6. Document in a new notebook section (or extend `notebooks/01_model_anatomy.ipynb`): `num_hidden_layers`, `hidden_size`, `num_attention_heads`, `num_key_value_heads`, `vocab_size`
+> 7. Tokenization exploration: `tokenizer.encode("Why is the sun yellow")`, `tokenizer.decode(...)`, peek `tokenizer.get_vocab()`, explain why `"understanding"` → `["under", "standing"]` (subword tokenization)
+> 8. Fill in the **Transformer** and **Tokenization** entries in `LLMXray.md`
+> 9. Commit: `"Day 1: Project setup, model loaded, tokenization understood"`
 
 ---
 
@@ -108,7 +54,8 @@
 
 ```
 llama-xray/
-├── CLAUDE.md                    ← This file (living document)
+├── CLAUDE.md                    ← This file (tasks + progress)
+├── LLMXray.md                   ← Key Concepts Reference (fills in as we learn)
 ├── README.md                    ← Portfolio-facing writeup
 ├── requirements.txt
 ├── notebooks/                   ← Jupyter exploration notebooks
@@ -122,36 +69,27 @@ llama-xray/
 │   └── 08_cache_optimization.ipynb
 ├── src/
 │   ├── inspector/               ← Core inspection toolkit
-│   │   ├── __init__.py
-│   │   ├── model_loader.py      ← Load model with full introspection flags
-│   │   ├── layer_inspector.py   ← Per-layer output extraction
-│   │   ├── embedding_explorer.py← Word similarity, nearest neighbors
-│   │   ├── attention_visualizer.py ← Attention heatmaps per layer/head
-│   │   ├── kv_cache_analyzer.py ← Cache size tracking, token importance
-│   │   └── logit_lens.py        ← Predictions at each layer
-│   ├── pruning/                 ← Track A: Layer pruning
-│   │   ├── __init__.py
-│   │   ├── layer_pruner.py      ← Remove/skip layers
-│   │   ├── layer_importance_scorer.py ← Rank layers by importance
-│   │   └── eval_pruned.py       ← Evaluate pruned model quality
-│   ├── kv_optimization/         ← Track B: KV cache optimization
-│   │   ├── __init__.py
-│   │   ├── cache_profiler.py    ← Measure cache memory and usage
-│   │   ├── token_reducer.py     ← Eviction strategies
-│   │   └── eval_optimized.py    ← Evaluate optimized cache quality
+│   │   ├── model_loader.py
+│   │   ├── layer_inspector.py
+│   │   ├── embedding_explorer.py
+│   │   ├── attention_visualizer.py
+│   │   ├── kv_cache_analyzer.py
+│   │   └── logit_lens.py
+│   ├── pruning/                 ← Track A
+│   │   ├── layer_pruner.py
+│   │   ├── layer_importance_scorer.py
+│   │   └── eval_pruned.py
+│   ├── kv_optimization/         ← Track B
+│   │   ├── cache_profiler.py
+│   │   ├── token_reducer.py
+│   │   └── eval_optimized.py
 │   └── eval/                    ← Shared evaluation framework
-│       ├── __init__.py
-│       ├── benchmark.py         ← Run all test prompts, score results
-│       ├── test_prompts.py      ← Curated test prompts by category
-│       └── comparison.py        ← Before/after comparison tables
+│       ├── benchmark.py
+│       ├── test_prompts.py
+│       └── comparison.py
 ├── outputs/                     ← Visualizations, charts, reports
-│   ├── attention_maps/
-│   ├── logit_lens/
-│   ├── pruning_results/
-│   ├── cache_profiles/
-│   └── final_report/
 └── data/
-    └── test_prompts.json        ← All test prompts in one file
+    └── test_prompts.json
 ```
 
 ---
@@ -166,7 +104,35 @@ seaborn
 numpy
 jupyter
 tqdm
-scikit-learn          # for PCA/t-SNE embedding visualization
+scikit-learn
+```
+
+Use latest stable PyTorch (2.5+, MPS built in). Python 3.11.x or 3.12.x.
+
+---
+
+## Hardware & Acceleration (Mac Mini M4)
+
+Summary: use the Apple GPU via PyTorch's MPS backend. 10-core M4 GPU ≈ 3–5× faster than CPU; 16GB unified memory makes CPU↔GPU moves free. FP16 is well supported; skip `torch.compile` on MPS for now.
+
+### Device setup (used everywhere in this project)
+```python
+import torch
+
+def pick_device():
+    if torch.backends.mps.is_available():
+        return "mps"
+    if torch.cuda.is_available():
+        return "cuda"
+    return "cpu"
+
+device = pick_device()   # "mps" on this Mac Mini
+model = model.to(device)
+```
+
+### Env var (in `~/.zshrc`)
+```bash
+export PYTORCH_ENABLE_MPS_FALLBACK=1
 ```
 
 ---
@@ -211,13 +177,26 @@ TEST_PROMPTS = {
 
 ## Daily Task Plan
 
-### Day 1 — Friday, April 10, 2026
-**Phase 0: Project Setup + Understanding Tokenization**
+### Day 1 — Thursday, April 23, 2026
+**Phase 0: Mac Mini Environment Bootstrap + Project Setup + Understanding Tokenization**
 
-- [ ] Create project directory structure (as defined above)
-- [ ] Create `requirements.txt` and install all dependencies
-- [ ] Download Llama 3.2 1B FP16 from Hugging Face
-- [ ] Write `model_loader.py` — load model with `output_hidden_states=True` and `output_attentions=True`
+**Mac Mini bootstrap (one-time, because this machine is fresh):**
+- [x] Clone repo onto Mac Mini (done — files already present at `~/projects/llama1B-finetunning/`)
+- [x] Install pyenv: `brew install pyenv` (v2.6.27) — pyenv init block added to `~/.zshrc`
+- [x] Install Python 3.11.9: `pyenv install 3.11.9` then `pyenv local 3.11.9` (`.python-version` pinned at project root)
+- [x] Create venv: `python3 -m venv venv` (activate via `source venv/bin/activate` when working interactively; Claude Code uses `./venv/bin/python` directly since shell state doesn't persist across tool calls)
+- [x] Install deps: `./venv/bin/pip install -r requirements.txt` — got torch 2.11.0, transformers 5.6.2, huggingface_hub 1.11.0, jupyter, scikit-learn, matplotlib, seaborn, pandas, numpy
+- [x] Verify MPS works: `torch.backends.mps.is_available() == True` on torch 2.11.0
+- [x] Add `export PYTORCH_ENABLE_MPS_FALLBACK=1` to `~/.zshrc`
+- [ ] HF access: create HF account at https://huggingface.co/join, request Llama 3.2 1B at https://huggingface.co/meta-llama/Llama-3.2-1B (Meta approval, usually minutes)
+- [ ] Log in with new CLI: `./venv/bin/hf auth login --token hf_...` (Read token from https://huggingface.co/settings/tokens — **note:** `huggingface-cli` is deprecated; use `hf`)
+- [x] Update `src/inspector/model_loader.py` — added `pick_device()` helper (MPS → CUDA → CPU) and made `device=None` auto-pick MPS
+
+**Project setup (largely done on MacBook — in-repo files carry over):**
+- [x] Create project directory structure (as defined above)
+- [x] Create `requirements.txt` (dependencies re-installed fresh in the Mac Mini venv — done in bootstrap above)
+- [ ] Download Llama 3.2 1B FP16 (auto-downloads into `~/.cache/huggingface/` on first model load — blocked on HF login above)
+- [x] Write `model_loader.py` — loads model with `output_hidden_states=True` and `output_attentions=True`; now also handles MPS auto-select
 - [ ] Run `print(model)` — see full architecture, count layers, understand the structure
 - [ ] Run `print(model.config)` — document: num_hidden_layers, hidden_size, num_attention_heads, num_key_value_heads, vocab_size
 - [ ] **Learn: Tokenization** — write a notebook section showing:
@@ -226,7 +205,7 @@ TEST_PROMPTS = {
   - What the vocabulary looks like: `tokenizer.get_vocab()`
   - Why "understanding" becomes ["under", "standing"] — subword tokenization explained
 - [ ] Run one simple generation to confirm everything works: `model.generate("The capital of France is")`
-- [ ] **Concept note:** Write the "Transformer" and "Tokenization" entries in Key Concepts Reference above
+- [ ] **Concept note:** Write the "Transformer" and "Tokenization" entries in `LLMXray.md`
 - [ ] Commit: "Day 1: Project setup, model loaded, tokenization understood"
 
 **Understanding goal for Day 1:**
@@ -236,7 +215,7 @@ TEST_PROMPTS = {
 
 ---
 
-### Day 2 — Monday, April 13, 2026
+### Day 2 — Friday, April 24, 2026
 **Phase 1A: Logit Lens + Understanding Attention**
 
 - [ ] **Learn: Attention mechanism from scratch**
@@ -245,7 +224,7 @@ TEST_PROMPTS = {
   - How scores are computed: Q × K → softmax → multiply by V
   - What multi-head attention means: 32 smaller attention operations running in parallel
   - Each head can learn a different pattern (grammar, meaning, position, etc.)
-  - Write this up in the Key Concepts Reference
+  - Write this up in `LLMXray.md`
 - [ ] Build `logit_lens.py`:
   - Input: prompt string
   - Process: run model with `output_hidden_states=True`
@@ -260,7 +239,7 @@ TEST_PROMPTS = {
 - [ ] **Key observation:** Are some prompts "solved" early (layer 4-5) while others need all 16 layers?
 - [ ] Create visualization: heatmap with layers on X axis, top-5 tokens on Y axis, probability as color
 - [ ] Save all visualizations to `outputs/logit_lens/`
-- [ ] **Concept note:** Write the "Attention (Q, K, V)", "Multi-Head Attention", and "Logit Lens" entries
+- [ ] **Concept note:** Write the "Attention (Q, K, V)", "Multi-Head Attention", and "Logit Lens" entries in `LLMXray.md`
 - [ ] Commit: "Day 2: Logit lens built, attention mechanism understood"
 
 **Understanding goal for Day 2:**
@@ -270,7 +249,7 @@ TEST_PROMPTS = {
 
 ---
 
-### Day 3 — Tuesday, April 14, 2026
+### Day 3 — Monday, April 27, 2026
 **Phase 1B: Attention Visualizer + Embedding Explorer**
 
 - [ ] Build `attention_visualizer.py`:
@@ -299,7 +278,7 @@ TEST_PROMPTS = {
   - Cluster programming terms and plot in 2D
   - Cluster animal terms and plot in 2D
 - [ ] Save all visualizations to `outputs/attention_maps/` and `outputs/embeddings/`
-- [ ] **Concept note:** Write the "Embeddings" entry in Key Concepts Reference
+- [ ] **Concept note:** Write the "Embeddings" entry in `LLMXray.md`
 - [ ] Commit: "Day 3: Attention visualizer + embedding explorer built"
 
 **Understanding goal for Day 3:**
@@ -310,7 +289,7 @@ TEST_PROMPTS = {
 
 ---
 
-### Day 4 — Wednesday, April 15, 2026
+### Day 4 — Tuesday, April 28, 2026
 **Phase 1C: KV Cache Analyzer + Weight Tweaker**
 
 - [ ] Build `kv_cache_analyzer.py`:
@@ -347,7 +326,7 @@ TEST_PROMPTS = {
   - Swap layer 2 and layer 14 — does the model produce garbage? (expected: yes)
   - Scale head 0 in layer 8 by 10x — what prediction changes?
   - Document all observations
-- [ ] **Concept note:** Write the "KV Cache" and "Feed-Forward Network (MLP)" entries
+- [ ] **Concept note:** Write the "KV Cache" and "Feed-Forward Network (MLP)" entries in `LLMXray.md`
 - [ ] Commit: "Day 4: KV cache analyzer + weight tweaker built, model broken and studied"
 
 **Understanding goal for Day 4:**
@@ -357,7 +336,7 @@ TEST_PROMPTS = {
 
 ---
 
-### Day 5 — Thursday, April 16, 2026
+### Day 5 — Wednesday, April 29, 2026
 **Phase 2A: Layer Importance Scoring**
 
 - [ ] Build `layer_importance_scorer.py` with three scoring methods:
@@ -390,7 +369,7 @@ TEST_PROMPTS = {
 
 ---
 
-### Day 6 — Friday, April 17, 2026
+### Day 6 — Thursday, April 30, 2026
 **Phase 2B: Sequential Layer Removal — Experiments**
 
 - [ ] Build `layer_pruner.py`:
@@ -421,7 +400,7 @@ TEST_PROMPTS = {
 
 ---
 
-### Day 7 — Monday, April 20, 2026
+### Day 7 — Friday, May 1, 2026
 **Phase 2C: Smart Pruning + Skip Connections**
 
 - [ ] **Experiment 3 — Remove least important first:**
@@ -451,7 +430,7 @@ TEST_PROMPTS = {
 
 ---
 
-### Day 8 — Tuesday, April 21, 2026
+### Day 8 — Monday, May 4, 2026
 **Phase 2D: Pruning Results Analysis + Speed Benchmarks**
 
 - [ ] For each pruning configuration that maintains 75%+ quality:
@@ -488,7 +467,7 @@ TEST_PROMPTS = {
 
 ---
 
-### Day 9 — Wednesday, April 22, 2026
+### Day 9 — Tuesday, May 5, 2026
 **Phase 3A: KV Cache Profiling**
 
 - [ ] Build `cache_profiler.py`:
@@ -519,7 +498,7 @@ TEST_PROMPTS = {
 
 ---
 
-### Day 10 — Thursday, April 23, 2026
+### Day 10 — Wednesday, May 6, 2026
 **Phase 3B: Attention Sink Analysis + Basic Eviction**
 
 - [ ] **Learn: Attention Sinks**
@@ -544,11 +523,12 @@ TEST_PROMPTS = {
   - Try window sizes: 75%, 50%, 25%
   - Compare with window-only — does keeping sinks improve quality?
 - [ ] Document: which strategy works better and by how much?
+- [ ] **Concept note:** Write the "Attention Sinks" entry in `LLMXray.md`
 - [ ] Commit: "Day 10: Attention sinks verified, basic eviction strategies tested"
 
 ---
 
-### Day 11 — Friday, April 24, 2026
+### Day 11 — Thursday, May 7, 2026
 **Phase 3C: Advanced Eviction + Cache Quantization**
 
 - [ ] Build Strategy 3 — Importance-based eviction:
@@ -570,12 +550,12 @@ TEST_PROMPTS = {
   - Quantize cached K and V vectors from FP16 → INT8
   - Measure: memory savings vs quality drop
   - Try FP16 → INT4 as well — how much quality is lost?
-- [ ] **Concept note:** Write the "Quantization" entry in Key Concepts Reference
+- [ ] **Concept note:** Write the "Quantization" entry in `LLMXray.md`
 - [ ] Commit: "Day 11: Advanced eviction + cache quantization implemented"
 
 ---
 
-### Day 12 — Monday, April 27, 2026
+### Day 12 — Friday, May 8, 2026
 **Phase 3D: Combined Optimization + Track B Results**
 
 - [ ] Combine the best strategies from Days 10-11:
@@ -615,44 +595,22 @@ TEST_PROMPTS = {
 
 ---
 
-### Day 13 — Tuesday, April 28, 2026
+### Day 13 — Monday, May 11, 2026
 **Phase 4A: Interactive Dashboard**
 
 - [ ] Build a visualization dashboard (Streamlit or HTML/React):
-  - **Tab 1: Model Anatomy**
-    - Show model architecture diagram
-    - Layer count, head count, embedding size
-    - Interactive: click a layer to see its weights, attention patterns
-  - **Tab 2: Logit Lens Explorer**
-    - Input a prompt, see predictions emerge layer by layer
-    - Color-coded: green when correct answer appears, red when wrong
-    - Slider to highlight specific layers
-  - **Tab 3: Attention Maps**
-    - Select layer and head, see attention heatmap
-    - Toggle between different test prompts
-    - Highlight head types (previous-token, sink, semantic)
-  - **Tab 4: Embedding Space**
-    - Type a word, see nearest neighbors
-    - 2D scatter plot of word clusters
-    - Compare two words — show similarity score
-  - **Tab 5: Layer Pruning Results**
-    - Slider: drag to remove layers
-    - Shows quality score updating in real time
-    - Side-by-side: original predictions vs pruned predictions
-    - Highlights which layers are critical (red) vs removable (green)
-  - **Tab 6: KV Cache Optimizer**
-    - Visualize cache growth during generation
-    - Toggle eviction strategies, see memory savings
-    - Before/after comparison
-  - **Tab 7: Weight Playground**
-    - Select a layer, select a component (attention/MLP)
-    - Slider to add noise, scale, or zero out
-    - See predictions change live
+  - **Tab 1: Model Anatomy** — architecture diagram, layer/head/embedding counts, click a layer to see its weights and attention patterns
+  - **Tab 2: Logit Lens Explorer** — input a prompt, see predictions emerge layer by layer (green when correct appears, red when wrong, slider for specific layers)
+  - **Tab 3: Attention Maps** — select layer and head, see attention heatmap, toggle between test prompts, highlight head types
+  - **Tab 4: Embedding Space** — type a word, see nearest neighbors, 2D scatter plot of word clusters, compare two words
+  - **Tab 5: Layer Pruning Results** — slider to remove layers, quality score updates in real time, side-by-side predictions, critical (red) vs removable (green) highlights
+  - **Tab 6: KV Cache Optimizer** — visualize cache growth, toggle eviction strategies, before/after comparison
+  - **Tab 7: Weight Playground** — select a layer + component (attention/MLP), slider to add noise/scale/zero, predictions change live
 - [ ] Commit: "Day 13: Interactive dashboard built"
 
 ---
 
-### Day 14 — Wednesday, April 29, 2026
+### Day 14 — Tuesday, May 12, 2026
 **Phase 4B: Portfolio Writeup + README**
 
 - [ ] Write comprehensive README.md:
@@ -708,19 +666,16 @@ TEST_PROMPTS = {
 
 ---
 
-### Day 15 — Thursday, April 30, 2026
+### Day 15 — Wednesday, May 13, 2026
 **Phase 4C: Final Review + Future Work**
 
 - [ ] End-to-end test: clone repo fresh, install deps, run all notebooks, verify outputs
-- [ ] Review CLAUDE.md — ensure all observations are documented
+- [ ] Review CLAUDE.md and LLMXray.md — ensure all observations and concepts are documented
 - [ ] Write "Future Work" section in README:
   - Scale to Llama 3.2 3B — do same layers matter?
   - Scale to Gemma 4 E2B — how does hybrid attention change things?
   - Compare pruning results across model sizes
-  - Implement more advanced techniques:
-    - Activation patching (swap activations between prompts)
-    - Probing classifiers (train small classifiers on hidden states to find what's encoded)
-    - Circuit analysis (trace specific behaviors through attention heads)
+  - Implement more advanced techniques (activation patching, probing classifiers, circuit analysis)
   - Package toolkit as a pip-installable library
 - [ ] Final commit: "Day 15: Project complete — llama-xray v1.0"
 - [ ] Push to GitHub
@@ -773,34 +728,9 @@ TEST_PROMPTS = {
 |----------|-----------|------|
 | Use Llama 3.2 1B over Gemma 4 | Clean standard transformer, no hybrid attention tricks. Better for learning fundamentals first. | April 9, 2026 |
 | Use FP16 over quantized | Need full precision to properly inspect weights, hidden states, and KV cache values. Quantized models lose detail. | April 9, 2026 |
-| 15 working days, no weekends | Sustainable pace, time for concepts to sink in between sessions. | April 9, 2026 |
-
----
-
-## Resources & References
-
-- **Logit Lens:** https://www.lesswrong.com/posts/AcKRB8wDpdaN6v6ru/interpreting-gpt-the-logit-lens
-- **Attention Sinks / StreamingLLM:** https://arxiv.org/abs/2309.17453
-- **Mechanistic Interpretability:** https://transformer-circuits.pub/
-- **Anthropic's Interpretability Research:** https://www.anthropic.com/research#interpretability
-- **Hugging Face Transformers Docs:** https://huggingface.co/docs/transformers
-- **Llama 3.2 Model Card:** https://huggingface.co/meta-llama/Llama-3.2-1B
-- **3Blue1Brown Neural Networks:** https://www.youtube.com/playlist?list=PLZHQObOWTQDNU6R1_67000Dx_ZCJB-3pi
-- **Andrej Karpathy — Let's build GPT:** https://www.youtube.com/watch?v=kCc8FmEb1nY
-
----
-
-## How to Update This File
-
-After completing any task:
-1. Check off the task checkbox: `- [ ]` → `- [x]`
-2. Update **Current Status** section at the top
-3. Add any interesting findings to **Observations** tables
-4. Add any problems to **Blockers** table
-5. Fill in **Key Concepts Reference** when you learn a new concept
-6. Commit the updated CLAUDE.md with a descriptive message
-
-This file is the single source of truth for the project's progress and learnings.
+| 15 working days, weekdays only | Sustainable pace, time for concepts to sink in between sessions. | April 9, 2026 |
+| Migrate project from Intel MacBook to Mac Mini M4 | M4 (16GB unified memory, 10-core GPU via MPS) is ~3-5x faster than Intel i5 CPU — unlocks faster iteration on Day 6-8 pruning sweep and longer sequences in Day 9-10 KV profiling. | April 23, 2026 |
+| Restart 15-day schedule on April 23, 2026 | Day 1 on MacBook only reached partial environment setup. Fresh start on Mac Mini aligns the day-by-day plan with actual execution. New end date: May 13, 2026. | April 23, 2026 |
 
 ---
 
@@ -818,17 +748,15 @@ This file is the single source of truth for the project's progress and learnings
 - [x] `__init__.py` files for all packages (`src/`, `inspector/`, `pruning/`, `kv_optimization/`, `eval/`)
 - [x] `.gitignore` — excludes venv, __pycache__, outputs, .DS_Store, etc.
 
-### Environment Setup (MUST redo on Mac Mini)
-- [x] **Python 3.11.9 installed via pyenv** — Python 3.13 does NOT work (PyTorch incompatible)
-  - Command: `pyenv install 3.11.9`
-  - Set local: `pyenv local 3.11.9` (creates `.python-version` file, gitignored)
-- [x] **Virtual environment created** — `python3 -m venv venv`
-  - The `venv/` folder is gitignored, must recreate on Mac Mini
-- [x] **All dependencies installed** in venv:
-  - `pip install -r requirements.txt`
-  - Then fix versions: `pip install "numpy<2" "transformers>=4.40,<5"`
-  - Final working versions: PyTorch 2.2.2, Transformers 4.57.6, NumPy 1.26.4
-  - **Note:** PyTorch 2.4+ is NOT available for Intel Mac. Mac Mini (if Apple Silicon) may get newer PyTorch.
+### Environment Setup — Mac Mini M4 (what actually needs to happen here)
+**Do NOT copy the Intel pins — use latest PyTorch with MPS support.**
+- [ ] `brew install pyenv` (verify `pyenv --version`)
+- [ ] `pyenv install 3.11.9` then `pyenv local 3.11.9` (Python 3.12.x also fine; avoid 3.13+ for now)
+- [ ] `python3 -m venv venv && source venv/bin/activate`
+- [ ] `pip install -r requirements.txt` — this picks up current stable PyTorch (2.5+) with MPS built in. Do NOT pin to 2.2.2.
+- [ ] Verify MPS: `python -c "import torch; print(torch.backends.mps.is_available())"` → must print `True`
+- [ ] Add `export PYTORCH_ENABLE_MPS_FALLBACK=1` to `~/.zshrc`, then `source ~/.zshrc`
+- [ ] Update `src/inspector/model_loader.py` to move the loaded model to `"mps"` device (see Hardware & Acceleration section above for the `pick_device()` pattern)
 
 ### Accounts & Access (MUST do before running)
 - [ ] **Hugging Face account** — needed to download Llama 3.2 1B
@@ -843,8 +771,25 @@ This file is the single source of truth for the project's progress and learnings
   - Stored in `~/.cache/huggingface/` (not in repo)
   - Requires HF login + Llama access approval
 
-### What Has NOT Been Done Yet
-- [ ] Notebook has not been run (waiting for HF access + model download)
-- [ ] No model outputs or visualizations generated yet
-- [ ] No concepts filled in yet in Key Concepts Reference
-- [ ] Day 1 tasks not fully completed — only setup portion done
+### What Has NOT Been Done Yet (as of April 23, 2026 on Mac Mini)
+- [ ] Mac Mini environment not yet bootstrapped (pyenv, Python, venv, deps — see checklist above)
+- [ ] MPS device wiring not yet added to `model_loader.py`
+- [ ] HF CLI not logged in on Mac Mini
+- [ ] Llama 3.2 1B model not yet downloaded into `~/.cache/huggingface/` on this machine
+- [ ] Notebook `01_model_anatomy.ipynb` has not been run here
+- [ ] No concepts filled in yet in `LLMXray.md`
+- [ ] Day 1 tasks not fully completed — only the in-repo code scaffolding was done on MacBook
+
+---
+
+## How to Update This File
+
+After completing any task:
+1. Check off the task checkbox: `- [ ]` → `- [x]`
+2. Update **Current Status** section at the top
+3. Add any interesting findings to **Observations** tables
+4. Add any problems to **Blockers** table
+5. When you learn a new concept, write it up in `LLMXray.md` (not here)
+6. Commit the updated CLAUDE.md with a descriptive message
+
+This file is the single source of truth for the project's progress and learnings.

@@ -9,7 +9,16 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 MODEL_ID = "meta-llama/Llama-3.2-1B"
 
 
-def load_model(model_id=MODEL_ID, device="cpu"):
+def pick_device():
+    """Pick the best available device: MPS (Apple Silicon) > CUDA > CPU."""
+    if torch.backends.mps.is_available():
+        return "mps"
+    if torch.cuda.is_available():
+        return "cuda"
+    return "cpu"
+
+
+def load_model(model_id=MODEL_ID, device=None):
     """
     Load model and tokenizer with introspection enabled.
 
@@ -17,6 +26,9 @@ def load_model(model_id=MODEL_ID, device="cpu"):
         model: The loaded model with output_hidden_states and output_attentions enabled
         tokenizer: The tokenizer for the model
     """
+    if device is None:
+        device = pick_device()
+
     print(f"Loading tokenizer from {model_id}...")
     tokenizer = AutoTokenizer.from_pretrained(model_id)
 
