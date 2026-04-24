@@ -25,28 +25,28 @@
 
 ## Current Status
 
-> **Last updated:** April 24, 2026
-> **Currently working on:** Day 1 (Mac Mini) — Environment bootstrap done; blocked on Hugging Face access approval for Llama 3.2 1B.
+> **Last updated:** April 24, 2026 (end of Day 1)
+> **Currently working on:** Day 1 complete ✅. Next session: Day 2 — Logit Lens + Attention.
 >
-> **Done today:**
-> - `brew install pyenv` (v2.6.27) + pyenv init in `~/.zshrc`
-> - `pyenv install 3.11.9` + `pyenv local 3.11.9` (`.python-version` pinned)
-> - `python -m venv venv` created at project root
-> - `pip install -r requirements.txt` — got `torch 2.11.0`, `transformers 5.6.2`, `huggingface_hub 1.11.0`, full Jupyter stack, scikit-learn, matplotlib, seaborn, pandas, numpy
-> - MPS verified: `torch.backends.mps.is_available() == True` on torch 2.11.0
-> - `export PYTORCH_ENABLE_MPS_FALLBACK=1` added to `~/.zshrc`
-> - `src/inspector/model_loader.py` updated: added `pick_device()` helper (MPS → CUDA → CPU) and made `device=None` auto-pick MPS on this Mac Mini
+> **Day 1 done:**
+> - Environment: pyenv 2.6.27, Python 3.11.9, venv, deps installed (`torch 2.11.0`, `transformers 5.6.2`, `huggingface_hub 1.11.0`, Jupyter stack)
+> - MPS verified: `torch.backends.mps.is_available() == True`. `PYTORCH_ENABLE_MPS_FALLBACK=1` in `~/.zshrc`
+> - `src/inspector/model_loader.py`: `pick_device()` helper picks MPS → CUDA → CPU automatically
+> - HF: account created, Llama 3.2 1B access approved, Read token `llama-xray-mac-mini` saved via `hf auth login`
+> - **Model downloaded** (~2GB) into `~/.cache/huggingface/`, loaded on MPS
+> - **Architecture inspected**: 16 layers, hidden_size=2048, 32 attention heads, 8 KV heads (GQA), MLP intermediate=8192, vocab=128,256, max_position_embeddings=131,072, total params=1,235,814,400 (~1.24B)
+> - **Test generation works**: `"The capital of France is"` → model continues coherently about the Eiffel Tower etc.
+> - **Tokenization explored**: vocab=128,256; BOS=`<|begin_of_text|>` (id 128000); `"understanding"` → `["under", "standing"]`; `"pneumonia"` → `["p", "neum", "onia"]`; `"Paris"` and `"hello"` are one token each
+> - `notebooks/01_model_anatomy.ipynb` executed end-to-end with outputs saved
+> - `LLMXray.md`: **Transformer** and **Tokenization** entries filled in with concrete numbers and examples
 >
-> **Pending — pick up here:**
-> 1. Create a Hugging Face account at https://huggingface.co/join
-> 2. Request access to Llama 3.2 1B at https://huggingface.co/meta-llama/Llama-3.2-1B (Meta approval — usually minutes, can be up to a day)
-> 3. Create a **Read** token at https://huggingface.co/settings/tokens (name it `llama-xray-mac-mini` or similar)
-> 4. Log in: `./venv/bin/hf auth login --token hf_...` (note: `huggingface-cli` is deprecated; the new command is `hf`)
-> 5. Run `python -m src.inspector.model_loader` — this will download Llama 3.2 1B FP16 (~2GB) into `~/.cache/huggingface/` on first run, print model architecture, config, and a test generation
-> 6. Document in a new notebook section (or extend `notebooks/01_model_anatomy.ipynb`): `num_hidden_layers`, `hidden_size`, `num_attention_heads`, `num_key_value_heads`, `vocab_size`
-> 7. Tokenization exploration: `tokenizer.encode("Why is the sun yellow")`, `tokenizer.decode(...)`, peek `tokenizer.get_vocab()`, explain why `"understanding"` → `["under", "standing"]` (subword tokenization)
-> 8. Fill in the **Transformer** and **Tokenization** entries in `LLMXray.md`
-> 9. Commit: `"Day 1: Project setup, model loaded, tokenization understood"`
+> **Next session — Day 2 (Friday April 24, 2026 per schedule; pick up whenever):**
+> 1. Learn: attention mechanism (Q, K, V, multi-head) — from scratch, no jargon
+> 2. Build `src/inspector/logit_lens.py` — project each layer's hidden state through `lm_head` to see what the model predicts at every layer
+> 3. Run logit lens on all test prompts — find at which layer "Paris" emerges for `"The capital of France is"`, and at which layer "4" emerges for `"2 + 2 ="`
+> 4. Visualize: heatmap with layers on X, top-5 tokens on Y, probability as color → save to `outputs/logit_lens/`
+> 5. Fill in **Attention (Q, K, V)**, **Multi-Head Attention**, and **Logit Lens** entries in `LLMXray.md`
+> 6. Commit: `"Day 2: Logit lens built, attention mechanism understood"`
 
 ---
 
@@ -188,24 +188,24 @@ TEST_PROMPTS = {
 - [x] Install deps: `./venv/bin/pip install -r requirements.txt` — got torch 2.11.0, transformers 5.6.2, huggingface_hub 1.11.0, jupyter, scikit-learn, matplotlib, seaborn, pandas, numpy
 - [x] Verify MPS works: `torch.backends.mps.is_available() == True` on torch 2.11.0
 - [x] Add `export PYTORCH_ENABLE_MPS_FALLBACK=1` to `~/.zshrc`
-- [ ] HF access: create HF account at https://huggingface.co/join, request Llama 3.2 1B at https://huggingface.co/meta-llama/Llama-3.2-1B (Meta approval, usually minutes)
-- [ ] Log in with new CLI: `./venv/bin/hf auth login --token hf_...` (Read token from https://huggingface.co/settings/tokens — **note:** `huggingface-cli` is deprecated; use `hf`)
+- [x] HF access: account created, Llama 3.2 1B access approved
+- [x] Log in with new CLI: `hf auth login` — token `llama-xray-mac-mini` saved (Read scope)
 - [x] Update `src/inspector/model_loader.py` — added `pick_device()` helper (MPS → CUDA → CPU) and made `device=None` auto-pick MPS
 
 **Project setup (largely done on MacBook — in-repo files carry over):**
 - [x] Create project directory structure (as defined above)
 - [x] Create `requirements.txt` (dependencies re-installed fresh in the Mac Mini venv — done in bootstrap above)
-- [ ] Download Llama 3.2 1B FP16 (auto-downloads into `~/.cache/huggingface/` on first model load — blocked on HF login above)
+- [x] Download Llama 3.2 1B FP16 (auto-downloaded into `~/.cache/huggingface/`, ~2GB)
 - [x] Write `model_loader.py` — loads model with `output_hidden_states=True` and `output_attentions=True`; now also handles MPS auto-select
-- [ ] Run `print(model)` — see full architecture, count layers, understand the structure
-- [ ] Run `print(model.config)` — document: num_hidden_layers, hidden_size, num_attention_heads, num_key_value_heads, vocab_size
-- [ ] **Learn: Tokenization** — write a notebook section showing:
-  - How text becomes token IDs: `tokenizer.encode("Why is the sun yellow")`
-  - How token IDs become text: `tokenizer.decode([...])`
-  - What the vocabulary looks like: `tokenizer.get_vocab()`
-  - Why "understanding" becomes ["under", "standing"] — subword tokenization explained
-- [ ] Run one simple generation to confirm everything works: `model.generate("The capital of France is")`
-- [ ] **Concept note:** Write the "Transformer" and "Tokenization" entries in `LLMXray.md`
+- [x] Run `print(model)` — full architecture seen: 16 `LlamaDecoderLayer`s, each with self_attn (q/k/v/o_proj) + mlp (gate/up/down_proj with SwiGLU) + 2 RMSNorms; plus embed_tokens (128256 × 2048), final norm, lm_head
+- [x] Run `print(model.config)` — documented: num_hidden_layers=16, hidden_size=2048, num_attention_heads=32, num_key_value_heads=8 (GQA), intermediate_size=8192, vocab_size=128256, max_position_embeddings=131072
+- [x] **Learn: Tokenization** — notebook section covers:
+  - Text → token IDs: `tokenizer.encode("Why is the sun yellow")` → `[128000, 10445, 374, 279, 7160, 14071]`
+  - Token IDs → text: `tokenizer.decode([...])`
+  - Vocabulary: 128,256 entries via `tokenizer.get_vocab()`
+  - Subword: `"understanding"` → `["under", "standing"]`, `"pneumonia"` → `["p", "neum", "onia"]`
+- [x] Run one simple generation to confirm everything works: `"The capital of France is"` → coherent output about Eiffel Tower, Louvre, etc.
+- [x] **Concept note:** Wrote the "Transformer" and "Tokenization" entries in `LLMXray.md`
 - [ ] Commit: "Day 1: Project setup, model loaded, tokenization understood"
 
 **Understanding goal for Day 1:**
@@ -771,14 +771,14 @@ TEST_PROMPTS = {
   - Stored in `~/.cache/huggingface/` (not in repo)
   - Requires HF login + Llama access approval
 
-### What Has NOT Been Done Yet (as of April 23, 2026 on Mac Mini)
-- [ ] Mac Mini environment not yet bootstrapped (pyenv, Python, venv, deps — see checklist above)
-- [ ] MPS device wiring not yet added to `model_loader.py`
-- [ ] HF CLI not logged in on Mac Mini
-- [ ] Llama 3.2 1B model not yet downloaded into `~/.cache/huggingface/` on this machine
-- [ ] Notebook `01_model_anatomy.ipynb` has not been run here
-- [ ] No concepts filled in yet in `LLMXray.md`
-- [ ] Day 1 tasks not fully completed — only the in-repo code scaffolding was done on MacBook
+### Mac Mini Transition Status (as of April 24, 2026) — ALL DONE ✅
+- [x] Mac Mini environment bootstrapped (pyenv, Python 3.11.9, venv, deps)
+- [x] MPS device wiring added to `model_loader.py`
+- [x] HF CLI logged in on Mac Mini
+- [x] Llama 3.2 1B model downloaded into `~/.cache/huggingface/`
+- [x] Notebook `01_model_anatomy.ipynb` executed end-to-end with outputs saved
+- [x] Transformer + Tokenization concepts filled in `LLMXray.md`
+- [x] Day 1 tasks fully completed on Mac Mini
 
 ---
 
