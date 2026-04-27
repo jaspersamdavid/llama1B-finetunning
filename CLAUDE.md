@@ -25,28 +25,32 @@
 
 ## Current Status
 
-> **Last updated:** April 24, 2026 (end of Day 1)
-> **Currently working on:** Day 1 complete ✅. Next session: Day 2 — Logit Lens + Attention.
+> **Last updated:** April 26, 2026 (end of Day 2)
+> **Currently working on:** Day 2 complete ✅. Next session: Day 3 — Attention Visualizer + Embedding Explorer.
 >
-> **Day 1 done:**
-> - Environment: pyenv 2.6.27, Python 3.11.9, venv, deps installed (`torch 2.11.0`, `transformers 5.6.2`, `huggingface_hub 1.11.0`, Jupyter stack)
-> - MPS verified: `torch.backends.mps.is_available() == True`. `PYTORCH_ENABLE_MPS_FALLBACK=1` in `~/.zshrc`
-> - `src/inspector/model_loader.py`: `pick_device()` helper picks MPS → CUDA → CPU automatically
-> - HF: account created, Llama 3.2 1B access approved, Read token `llama-xray-mac-mini` saved via `hf auth login`
-> - **Model downloaded** (~2GB) into `~/.cache/huggingface/`, loaded on MPS
-> - **Architecture inspected**: 16 layers, hidden_size=2048, 32 attention heads, 8 KV heads (GQA), MLP intermediate=8192, vocab=128,256, max_position_embeddings=131,072, total params=1,235,814,400 (~1.24B)
-> - **Test generation works**: `"The capital of France is"` → model continues coherently about the Eiffel Tower etc.
-> - **Tokenization explored**: vocab=128,256; BOS=`<|begin_of_text|>` (id 128000); `"understanding"` → `["under", "standing"]`; `"pneumonia"` → `["p", "neum", "onia"]`; `"Paris"` and `"hello"` are one token each
-> - `notebooks/01_model_anatomy.ipynb` executed end-to-end with outputs saved
-> - `LLMXray.md`: **Transformer** and **Tokenization** entries filled in with concrete numbers and examples
+> **Day 1 done** (see `completeness.md` for full checklist):
+> - Environment ready, MPS verified, HF auth done, model on MPS, architecture + tokenization understood and documented.
 >
-> **Next session — Day 2 (Friday April 24, 2026 per schedule; pick up whenever):**
-> 1. Learn: attention mechanism (Q, K, V, multi-head) — from scratch, no jargon
-> 2. Build `src/inspector/logit_lens.py` — project each layer's hidden state through `lm_head` to see what the model predicts at every layer
-> 3. Run logit lens on all test prompts — find at which layer "Paris" emerges for `"The capital of France is"`, and at which layer "4" emerges for `"2 + 2 ="`
-> 4. Visualize: heatmap with layers on X, top-5 tokens on Y, probability as color → save to `outputs/logit_lens/`
-> 5. Fill in **Attention (Q, K, V)**, **Multi-Head Attention**, and **Logit Lens** entries in `LLMXray.md`
-> 6. Commit: `"Day 2: Logit lens built, attention mechanism understood"`
+> **Day 2 done:**
+> - **`src/inspector/logit_lens.py`** built and verified on MPS — `run_logit_lens()`, `find_emergence_layer()`, `print_table()`, `plot_heatmap()`, `run_all_prompts()`.
+> - **Ran full test suite** (13 prompts × 5 categories) — 22 heatmaps saved to `outputs/logit_lens/`.
+> - **Key emergence findings** (April 26, 2026 run):
+>   - `"The capital of France is"` → `Paris` first at **layer 12** (57.9%); layers 1–11 = garbage/city-related noise
+>   - `"The chemical formula for water is"` → predicts `WATER` at L12–13, then `H` at **layer 14** (64.5%) — topic vs. format distinction
+>   - `"The cat sat on the"` → `mat` enters top-5 at **layer 14**, wins at L15–16 (73.8%)
+>   - `"def hello_world():\n    print("` → `Hello` at **layer 13** (confident at 47% by L14)
+>   - `"2 + 2 ="` → `4` **never** in top-5; model predicts `?` — 1B model has no arithmetic capability
+> - **Fixed**: removed `output_hidden_states/attentions` from `model_loader.py` `from_pretrained` (were causing "invalid generation flag" warning); changed `torch_dtype` → `dtype`.
+> - **`notebooks/02_logit_lens.ipynb`** created with 5 parts: France/math/water/summary table/full suite.
+> - **`LLMXray.md`**: **Attention (Q, K, V)**, **Multi-Head Attention**, **Feed-Forward Network (MLP)**, and **Logit Lens** sections filled in with concrete numbers and experiment results.
+>
+> **Next session — Day 3 (Monday April 27, 2026):**
+> 1. Build `src/inspector/attention_visualizer.py` — extract attention matrices, generate per-head heatmaps
+> 2. Experiment: identify head types across 5+ prompts (previous-token, first-token sink, semantic, positional)
+> 3. Build `src/inspector/embedding_explorer.py` — cosine similarity search, 2D PCA/t-SNE cluster plots
+> 4. Experiment: `find_similar("Python")`, `find_similar("king")`, cluster programming terms
+> 5. Fill in **Embeddings** entry in `LLMXray.md`
+> 6. Commit: `"Day 3: Attention visualizer + embedding explorer built"`
 
 ---
 

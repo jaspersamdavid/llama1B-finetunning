@@ -35,9 +35,7 @@ def load_model(model_id=MODEL_ID, device=None):
     print(f"Loading model from {model_id} (this may take a minute on first run)...")
     model = AutoModelForCausalLM.from_pretrained(
         model_id,
-        torch_dtype=torch.float16,
-        output_hidden_states=True,
-        output_attentions=True,
+        dtype=torch.float16,
     )
     model.to(device)
     model.eval()
