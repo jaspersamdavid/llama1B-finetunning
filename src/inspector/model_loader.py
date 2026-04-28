@@ -36,6 +36,7 @@ def load_model(model_id=MODEL_ID, device=None):
     model = AutoModelForCausalLM.from_pretrained(
         model_id,
         dtype=torch.float16,
+        attn_implementation="eager",  # sdpa fused kernel doesn't expose attention matrices
     )
     model.to(device)
     model.eval()

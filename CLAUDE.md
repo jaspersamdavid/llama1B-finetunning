@@ -25,8 +25,8 @@
 
 ## Current Status
 
-> **Last updated:** April 26, 2026 (end of Day 2)
-> **Currently working on:** Day 2 complete ✅. Next session: Day 3 — Attention Visualizer + Embedding Explorer.
+> **Last updated:** April 27, 2026 (end of Day 3)
+> **Currently working on:** Day 3 complete ✅. Next session: Day 4 — KV Cache Analyzer + Weight Tweaker.
 >
 > **Day 1 done** (see `completeness.md` for full checklist):
 > - Environment ready, MPS verified, HF auth done, model on MPS, architecture + tokenization understood and documented.
@@ -44,13 +44,31 @@
 > - **`notebooks/02_logit_lens.ipynb`** created with 5 parts: France/math/water/summary table/full suite.
 > - **`LLMXray.md`**: **Attention (Q, K, V)**, **Multi-Head Attention**, **Feed-Forward Network (MLP)**, and **Logit Lens** sections filled in with concrete numbers and experiment results.
 >
-> **Next session — Day 3 (Monday April 27, 2026):**
-> 1. Build `src/inspector/attention_visualizer.py` — extract attention matrices, generate per-head heatmaps
-> 2. Experiment: identify head types across 5+ prompts (previous-token, first-token sink, semantic, positional)
-> 3. Build `src/inspector/embedding_explorer.py` — cosine similarity search, 2D PCA/t-SNE cluster plots
-> 4. Experiment: `find_similar("Python")`, `find_similar("king")`, cluster programming terms
-> 5. Fill in **Embeddings** entry in `LLMXray.md`
-> 6. Commit: `"Day 3: Attention visualizer + embedding explorer built"`
+> **Day 3 done:**
+> - **`src/inspector/attention_visualizer.py`** built — `get_attention_matrices()`, `classify_head()`, `classify_all_heads()`, `print_head_classification()`, `plot_pattern_summary()`, `plot_layer_overview()`, `run_head_type_experiment()`.
+> - **Fixed**: `attn_implementation="eager"` added to `model_loader.py` — `sdpa` fused kernel doesn't expose attention matrices.
+> - **Key head pattern findings** (April 27, 2026 run across 6 prompts × 16 layers × 32 heads = 3072 heads total):
+>   - **98.6% of all heads are "sink" heads** — they dump attention onto the BOS token (`<|begin_of_text|>`). This is the attention sink phenomenon (Day 10 topic).
+>   - Sink dominance is strongest on short prompts (5-6 tokens). Math prompt (`"2 + 2 = 4 and 3 + 3 ="`) at 11 tokens shows slightly more variety: 96% sink, 2% self, 1% prev-token, 1% semantic.
+>   - L0 H2 and L0 H25 are consistent **prev-token heads** across all prompts — one of the few non-sink heads.
+>   - L14 H25 and L15 H14 are consistent **self-attention heads** — appear across multiple prompts.
+> - **`src/inspector/embedding_explorer.py`** built — `find_similar()`, `compare_words()`, `cluster_words()` (PCA 2D).
+> - **Key embedding findings** (April 27, 2026 run):
+>   - king ↔ queen: **0.61** (very similar) ✓ classic word2vec test passes
+>   - France ↔ Germany: **0.53** > France ↔ Paris: **0.47** — co-occurrence context beats human intuition
+>   - Python ↔ snake: **0.18** (distant) — "Python" embedding is entirely in programming space
+>   - cat ↔ table: **0.06** (essentially 0) — random unrelated words have near-zero similarity
+> - 3 cluster plots saved to `outputs/embeddings/` (programming, animals, royalty/geography)
+> - 28+ attention map PNGs saved to `outputs/attention_maps/`
+> - **`LLMXray.md`**: **Embeddings** section filled in with all findings and concrete similarity numbers.
+>
+> **Next session — Day 4 (Tuesday April 28, 2026):**
+> 1. Build `src/inspector/kv_cache_analyzer.py` — log cache size/memory per step, compare speed with/without cache
+> 2. Learn KV cache from scratch — why it exists, memory formula, observe growth
+> 3. Build `src/inspector/weight_tweaker.py` — CLI tool to zero/noise/scale/swap layers and observe effects
+> 4. Experiment: zero out layers 0, 8, 15 — what breaks? Add noise at 0.01, 0.1, 1.0 — when does output collapse?
+> 5. Fill in **KV Cache** entry in `LLMXray.md`
+> 6. Commit: `"Day 4: KV cache analyzer + weight tweaker built, model broken and studied"`
 
 ---
 

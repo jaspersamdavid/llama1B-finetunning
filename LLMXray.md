@@ -100,7 +100,68 @@ parts.
 `tokenizer.encode(text)` for text→IDs and `tokenizer.decode([id])` for ID→text.
 
 ## Embeddings
-> [To be filled — Day 3]
+
+**What it is:** The embedding table is a lookup table that converts token IDs (numbers)
+into vectors (arrays of numbers the model can compute on). Every one of the 128,256 tokens
+in Llama's vocabulary has its own vector of 2048 numbers called its embedding.
+
+**Why it exists:** The model can't do math on the integer `60704` (the token ID for "Paris").
+It needs a rich numerical representation that captures meaning. Embeddings are that
+representation — and crucially, **similar words end up with similar vectors** because they
+were trained to predict the same kinds of neighbors in text.
+
+**Analogy:** Imagine a 2048-dimensional map of meaning. Every word is a point on this map.
+Words that appear in similar sentences during training get pulled toward each other. "king"
+and "queen" land close together. "cat" and "table" land far apart. You can measure how
+"close" two words are with cosine similarity — a score from 0.0 (nothing in common) to
+1.0 (identical direction).
+
+**Llama 3.2 1B specifics:**
+- Embedding table: `model.model.embed_tokens.weight` — shape `[128256, 2048]`
+- That's 128,256 rows × 2048 columns = ~262M numbers just for embeddings
+- At FP16, the embedding table alone is ~500MB
+- The same weight matrix is used in reverse at the end (`lm_head`) — this is called "weight tying"
+
+**Results from our run on April 27, 2026 — cosine similarities:**
+
+| Word 1 | Word 2 | Similarity | What it tells us |
+|--------|--------|-----------|-----------------|
+| king   | queen  | **0.61** | Very similar — royalty cluster |
+| king   | castle | 0.16 | Distant — same domain, different role |
+| France | Germany | **0.53** | More similar than France-Paris — co-occur in European news constantly |
+| France | Paris  | 0.47 | Country and capital, but different context patterns |
+| Python | Java   | 0.39 | Both programming languages |
+| Python | snake  | 0.18 | Distant — "Python" the language dominates training data, not the animal |
+| cat    | dog    | 0.32 | Common pets, moderately similar |
+| cat    | table  | 0.06 | Completely unrelated |
+| sun    | moon   | 0.31 | Celestial bodies, moderate similarity |
+| sun    | chair  | 0.06 | Completely unrelated |
+
+**Key insight — "France vs Germany > France vs Paris":**
+France and Germany appear together constantly (European Union, World War II, immigration policy,
+soccer tournaments). France and Paris appear in slightly different contexts (tourism, city guides,
+French culture). The embedding captures *contextual co-occurrence*, not human intuition about
+what's "more related."
+
+**Key insight — "Python ≠ snake":**
+In the training data (internet text), "Python" appears overwhelmingly in programming contexts:
+`import Python`, `Python 3.11`, `run Python script`. The snake sense is rare enough that the
+embedding gets pulled far from animal words. This shows embeddings are domain-sensitive.
+
+**Nearest neighbors for key words:**
+- `"king"` top neighbors: kings, queen, Kings, Queen, kingdom, 王 (Chinese: king), royal, prince, monarch, emperor
+- `"France"` top neighbors: French, Germany, Spain, 法国 (Chinese: France), Italy, Belgium, Paris
+- `"Python"` top neighbors: -python, _python, /python, .py, Java, Django (programming terms only — no snake-related words)
+
+**Cluster plots saved to `outputs/embeddings/`:**
+- `cluster_programming.png` — 15 programming terms in 2D PCA projection
+- `cluster_animals.png` — 15 animal terms
+- `cluster_royalty.png` — royalty/geography mix showing how they separate
+
+**Where we saw it:** `src/inspector/embedding_explorer.py`. Run with:
+```
+./venv/bin/python -m src.inspector.embedding_explorer
+```
 
 ## Attention (Q, K, V)
 
