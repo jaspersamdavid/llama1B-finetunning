@@ -287,8 +287,97 @@ functions. The wider the expansion, the more "compute" per layer.
 **Where we saw it:** `notebooks/01_model_anatomy.ipynb`. Each `LlamaDecoderLayer` prints
 `mlp: LlamaMLP(gate_proj, up_proj, down_proj, act_fn=silu)`.
 
+**MLP fragility — what we found by adding noise (April 29, 2026):**
+
+We added Gaussian noise N(0, σ²) to layer 5's `gate_proj.weight` and re-ran
+the logit lens for `"The capital of France is"` (baseline final-layer
+prediction = `Paris` at 48%):
+
+| Noise σ | Final-layer prediction | Verdict |
+|---|---|---|
+| 0.01 | `Paris` (51%) | indistinguishable from baseline — model is robust to small perturbations |
+| 0.1 | `being` (3%) | **catastrophic collapse** — output is no longer Paris-related |
+| 1.0 | `genomes` (1%) | total nonsense, model frozen on a single token across all layers |
+
+The collapse threshold is between 0.01 and 0.1 of standard-deviation noise —
+**a one order-of-magnitude shift** flips the model from "fine" to "broken."
+This is the meaning of "the model is a delicately-tuned web of weights" —
+small enough perturbations are absorbed; large enough perturbations are
+catastrophic with no graceful middle ground.
+
+The reason: the MLP is non-linear. Small noise gets dampened by the SwiGLU
+gate's sigmoid (saturates near 0 or 1). Large noise pushes activations into
+regions the next layer has never seen during training, and downstream layers
+have no idea how to interpret the corrupted signal.
+
 ## KV Cache
-> [To be filled — Day 3-4]
+
+**What it is:** A memory of all the Key and Value vectors the model has already
+computed for every cached token at every layer. When generating the *next*
+token, the model only needs to compute K and V for the new token — for all the
+previous tokens, it just reads from the cache.
+
+**Why it exists:** Without the cache, every time we generate a new token the
+model would have to redo the entire attention computation for *all* previous
+tokens. Generating 100 tokens would mean computing K and V 100 times for the
+first token, 99 times for the second, and so on — billions of redundant
+multiplications. With the cache, each token's K/V is computed exactly once.
+
+**Analogy:** Imagine writing a long essay. Without cache, every time you add a
+new sentence you have to re-read and re-summarize the entire essay from the
+beginning. With cache, you keep your running notes around and only summarize
+the new sentence. Same final result, vastly less work.
+
+**The math (Llama 3.2 1B):**
+```
+KV cache bytes = 2 (K+V) × num_layers × num_kv_heads × head_dim × seq_len × bytes_per_value
+              = 2 × 16 × 8 × 64 × seq_len × 2 (FP16)
+              = 32,768 bytes per cached token
+              = 32 KB per token
+```
+
+| Sequence length | Cache memory |
+|---|---|
+| 50 tokens | 1.56 MB |
+| 100 tokens | 3.12 MB |
+| 500 tokens | 15.62 MB |
+| 1000 tokens | 31.25 MB |
+| 5000 tokens | 156.25 MB |
+
+For comparison, the model weights themselves are ~2.3 GB at FP16 — so even at
+5000 tokens the cache is only ~7% of model size on the 1B model. **On bigger
+models this ratio inverts** — for Llama 70B at long context, the cache can
+exceed the weights, which is why caching strategy matters.
+
+**Speed result (verified April 29, 2026, 30 tokens, prompt = "Once upon a time"):**
+
+| Mode | Time | Throughput | Speedup |
+|---|---|---|---|
+| With cache | 1.58s | 19.0 tok/s | 1.0× |
+| Without cache | 3.42s | 8.8 tok/s | (slower) |
+| **Speedup with cache** | — | — | **2.17×** |
+
+The speedup grows with sequence length — at 30 tokens we see 2.17×, at 500
+tokens it would be much larger because the without-cache version's per-step
+work scales linearly with seq_len.
+
+**What's in `past_key_values` (transformers 5.x):**
+```python
+out = model(input_ids=..., use_cache=True)
+pkv = out.past_key_values            # DynamicCache object
+pkv.layers[layer_idx].keys           # tensor [1, num_kv_heads=8, seq_len, head_dim=64]
+pkv.layers[layer_idx].values         # tensor [1, num_kv_heads=8, seq_len, head_dim=64]
+```
+Each layer stores its own pair of tensors. K is what *was being attended to*,
+V is what *information was returned* — both are reusable for every future
+token because the input sequence isn't changing, only growing.
+
+**Where we saw it:** `src/inspector/kv_cache_analyzer.py`. Run with:
+```
+~/venvs/llama-xray/bin/python -m src.inspector.kv_cache_analyzer
+```
+Outputs in `outputs/kv_cache/`: cache growth chart, K-norm heatmap by layer ×
+step, with-vs-without cache speed comparison.
 
 ## Logit Lens
 

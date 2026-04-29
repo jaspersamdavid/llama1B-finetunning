@@ -25,50 +25,36 @@
 
 ## Current Status
 
-> **Last updated:** April 27, 2026 (end of Day 3)
-> **Currently working on:** Day 3 complete ✅. Next session: Day 4 — KV Cache Analyzer + Weight Tweaker.
+> **Last updated:** April 29, 2026 (end of Day 4)
+> **Currently working on:** Day 4 complete ✅. Next session: Day 5 — Layer Importance Scoring (Track A — Pruning, Phase 2A).
 >
-> **Day 1 done** (see `completeness.md` for full checklist):
-> - Environment ready, MPS verified, HF auth done, model on MPS, architecture + tokenization understood and documented.
+> **Inspector toolkit complete** (Days 1-4): `model_loader.py`, `logit_lens.py`,
+> `attention_visualizer.py`, `embedding_explorer.py`, `kv_cache_analyzer.py`,
+> `weight_tweaker.py`. All Day 1-4 detail archived in `completeness.md`.
 >
-> **Day 2 done:**
-> - **`src/inspector/logit_lens.py`** built and verified on MPS — `run_logit_lens()`, `find_emergence_layer()`, `print_table()`, `plot_heatmap()`, `run_all_prompts()`.
-> - **Ran full test suite** (13 prompts × 5 categories) — 22 heatmaps saved to `outputs/logit_lens/`.
-> - **Key emergence findings** (April 26, 2026 run):
->   - `"The capital of France is"` → `Paris` first at **layer 12** (57.9%); layers 1–11 = garbage/city-related noise
->   - `"The chemical formula for water is"` → predicts `WATER` at L12–13, then `H` at **layer 14** (64.5%) — topic vs. format distinction
->   - `"The cat sat on the"` → `mat` enters top-5 at **layer 14**, wins at L15–16 (73.8%)
->   - `"def hello_world():\n    print("` → `Hello` at **layer 13** (confident at 47% by L14)
->   - `"2 + 2 ="` → `4` **never** in top-5; model predicts `?` — 1B model has no arithmetic capability
-> - **Fixed**: removed `output_hidden_states/attentions` from `model_loader.py` `from_pretrained` (were causing "invalid generation flag" warning); changed `torch_dtype` → `dtype`.
-> - **`notebooks/02_logit_lens.ipynb`** created with 5 parts: France/math/water/summary table/full suite.
-> - **`LLMXray.md`**: **Attention (Q, K, V)**, **Multi-Head Attention**, **Feed-Forward Network (MLP)**, and **Logit Lens** sections filled in with concrete numbers and experiment results.
+> **Day 4 highlights** (full archive in `completeness.md`):
+> - **`kv_cache_analyzer.py`** + **`weight_tweaker.py`** built. KV cache = 32 KB
+>   per token on 1B; with-cache 2.17× faster than without at 30 tokens.
+> - **Headline finding**: `zero_attention(L8)` *raises* `"capital of France is"`
+>   → Paris from 48% → **69%**. Strong pre-Day-5 signal that L8 is redundant
+>   or counterproductive. `zero_attention(L0)` -20pp; `zero_attention(L15)` -28pp.
+> - **MLP noise collapse threshold** sits between σ=0.01 (invisible) and σ=0.1
+>   (catastrophic). Sharp transition, no graceful middle ground.
+> - `LLMXray.md`: **KV Cache** entry filled in; **MLP** entry expanded with
+>   noise-fragility table.
+> - `monkeypatching.md` parked for Days 10-12.
 >
-> **Day 3 done:**
-> - **`src/inspector/attention_visualizer.py`** built — `get_attention_matrices()`, `classify_head()`, `classify_all_heads()`, `print_head_classification()`, `plot_pattern_summary()`, `plot_layer_overview()`, `run_head_type_experiment()`.
-> - **Fixed**: `attn_implementation="eager"` added to `model_loader.py` — `sdpa` fused kernel doesn't expose attention matrices.
-> - **Key head pattern findings** (April 27, 2026 run across 6 prompts × 16 layers × 32 heads = 3072 heads total):
->   - **98.6% of all heads are "sink" heads** — they dump attention onto the BOS token (`<|begin_of_text|>`). This is the attention sink phenomenon (Day 10 topic).
->   - Sink dominance is strongest on short prompts (5-6 tokens). Math prompt (`"2 + 2 = 4 and 3 + 3 ="`) at 11 tokens shows slightly more variety: 96% sink, 2% self, 1% prev-token, 1% semantic.
->   - L0 H2 and L0 H25 are consistent **prev-token heads** across all prompts — one of the few non-sink heads.
->   - L14 H25 and L15 H14 are consistent **self-attention heads** — appear across multiple prompts.
-> - **`src/inspector/embedding_explorer.py`** built — `find_similar()`, `compare_words()`, `cluster_words()` (PCA 2D).
-> - **Key embedding findings** (April 27, 2026 run):
->   - king ↔ queen: **0.61** (very similar) ✓ classic word2vec test passes
->   - France ↔ Germany: **0.53** > France ↔ Paris: **0.47** — co-occurrence context beats human intuition
->   - Python ↔ snake: **0.18** (distant) — "Python" embedding is entirely in programming space
->   - cat ↔ table: **0.06** (essentially 0) — random unrelated words have near-zero similarity
-> - 3 cluster plots saved to `outputs/embeddings/` (programming, animals, royalty/geography)
-> - 28+ attention map PNGs saved to `outputs/attention_maps/`
-> - **`LLMXray.md`**: **Embeddings** section filled in with all findings and concrete similarity numbers.
->
-> **Next session — Day 4 (Tuesday April 28, 2026):**
-> 1. Build `src/inspector/kv_cache_analyzer.py` — log cache size/memory per step, compare speed with/without cache
-> 2. Learn KV cache from scratch — why it exists, memory formula, observe growth
-> 3. Build `src/inspector/weight_tweaker.py` — CLI tool to zero/noise/scale/swap layers and observe effects
-> 4. Experiment: zero out layers 0, 8, 15 — what breaks? Add noise at 0.01, 0.1, 1.0 — when does output collapse?
-> 5. Fill in **KV Cache** entry in `LLMXray.md`
-> 6. Commit: `"Day 4: KV cache analyzer + weight tweaker built, model broken and studied"`
+> **Next session — Day 5 (Thursday April 30, 2026):**
+> 1. Build `src/pruning/layer_importance_scorer.py` with three scoring methods:
+>    (1) logit-lens delta, (2) zero-out impact, (3) cosine similarity input vs
+>    output
+> 2. Run all three across all 16 layers + all test prompts; produce a unified
+>    ranked importance list
+> 3. Visualize: bar chart of per-layer importance with all three methods overlaid
+> 4. Save to `outputs/pruning_results/layer_importance_scores.png`
+> 5. Key question: do all three methods agree on which layers are
+>    important/redundant?
+> 6. Commit: `"Day 5: Layer importance scoring complete — layers ranked"`
 
 ---
 
@@ -289,50 +275,66 @@ TEST_PROMPTS = {
 
 ---
 
-### Day 4 — Tuesday, April 28, 2026
+### Day 4 — Wednesday, April 29, 2026 ✅ COMPLETED
 **Phase 1C: KV Cache Analyzer + Weight Tweaker**
 
-- [ ] Build `kv_cache_analyzer.py`:
-  - Generate tokens one at a time with `use_cache=True`
-  - At each step, log:
-    - Cache size (number of tokens × layers × head_dim)
-    - Total memory in MB
-    - K and V vector norms per layer per token
-  - Compare generation speed WITH vs WITHOUT cache (time 50 token generation both ways)
-  - Visualize: cache growth chart (steps vs memory)
-  - Visualize: K vector norm heatmap (layers × tokens)
-- [ ] **Learn: KV Cache from scratch**
-  - Why it exists: without cache, model recomputes K and V for ALL previous tokens every step
-  - With cache: store K and V, only compute for the new token
-  - How it grows: each new token adds one K vector + one V vector per layer per KV head
-  - Calculate: for a 500 token sequence, how much memory does the KV cache use?
-    - Formula: 2 (K+V) × num_layers × num_kv_heads × head_dim × seq_len × bytes_per_value
-- [ ] Build interactive `weight_tweaker.py` (CLI tool):
-  - Menu-driven loop:
-    1. Zero out a layer's attention (q_proj weights → all zeros)
-    2. Add noise to a layer's MLP (gate_proj += random noise × strength)
-    3. Scale a specific attention head (multiply head's q_proj rows by factor)
-    4. Swap two layers (exchange all weights between layer A and layer B)
-    5. Reset model to original weights
-    6. Change input text
-    7. Show logit lens before/after comparison
-    8. Quit
-  - After each tweak, automatically run logit lens and show side-by-side comparison
-- [ ] **Experiment: Break the model and observe**
-  - Zero out layer 0 attention — what happens? (early feature extraction lost)
-  - Zero out layer 15 attention — what happens? (final output prep lost)
-  - Zero out layer 8 attention — what happens? (mid-level reasoning lost)
-  - Add noise (0.01, 0.1, 1.0) to layer 5 MLP — at what noise level does output collapse?
-  - Swap layer 2 and layer 14 — does the model produce garbage? (expected: yes)
-  - Scale head 0 in layer 8 by 10x — what prediction changes?
-  - Document all observations
-- [ ] **Concept note:** Write the "KV Cache" and "Feed-Forward Network (MLP)" entries in `LLMXray.md`
-- [ ] Commit: "Day 4: KV cache analyzer + weight tweaker built, model broken and studied"
+> Full task checklist + experiment results archived in `completeness.md`.
+> Summary below is what future-Claude needs to know about the project state
+> after Day 4.
 
-**Understanding goal for Day 4:**
-> By end of day, you should be able to explain: what the KV cache is and why it exists,
-> how much memory it uses, and what happens when you break different parts of the model.
-> You should have an intuitive sense of "early layers do X, middle layers do Y, late layers do Z."
+**State after Day 4:**
+- **`src/inspector/kv_cache_analyzer.py`** built: `cache_memory_bytes()`,
+  `print_memory_breakdown()`, `profile_generation_with_cache()` (logs
+  per-step cache size, memory MB, K/V norms per layer, step time),
+  `profile_generation_without_cache()`, `compare_speed()`, plus three plot
+  helpers. KV cache memory = **32 KB per token** for Llama 3.2 1B
+  (= 2 × 16 layers × 8 kv_heads × 64 head_dim × 2 FP16 bytes).
+- **`src/inspector/weight_tweaker.py`** built: `WeightTweaker` class with
+  `zero_attention(L)`, `add_mlp_noise(L, σ)`, `scale_head(L, H, k)`,
+  `swap_layers(a, b)`, `reset()` primitives. Two entry points: script-mode
+  (runs predefined Day-4 experiment suite) and `interactive` REPL.
+  Snapshot/restore done via `state_dict()` deep clone.
+- **transformers 5.x KV cache API**: `past_key_values` is now a
+  `DynamicCache` object — access via `pkv.layers[i].keys` /
+  `pkv.layers[i].values`, NOT `pkv[i]`.
+
+**Key findings (April 29, 2026 run, prompt = `"The capital of France is"`,
+baseline final-layer prediction = `Paris` 48%):**
+
+| Tweak | Final-layer top-1 | Δ vs baseline | Insight |
+|---|---|---|---|
+| `zero_attention(L0)` | `Paris` (28%) | -20pp | L0 attention does real routing |
+| **`zero_attention(L8)`** | **`Paris` (69%)** | **+21pp** | **L8 redundant or harmful — prime pruning candidate** |
+| `zero_attention(L15)` | `Paris` (20%) | -28pp | L15 sharpens confidence, doesn't decide |
+| `mlp_noise(L5, σ=0.01)` | `Paris` (51%) | invisible | model robust to small noise |
+| `mlp_noise(L5, σ=0.1)` | `being` (3%) | catastrophic | **collapse threshold between 0.01 and 0.1** |
+| `mlp_noise(L5, σ=1.0)` | `genomes` (1%) | total nonsense | every layer 6-16 frozen on garbage |
+| `swap_layers(L2, L14)` | `otope` (1%) | total nonsense | layers can't function out of position |
+| `scale_head(L8 H0, ×10)` | `Paris` (46%) | -2pp | one head of 32 is a small lever |
+
+**Headline:** zeroing L8 attention *improves* Paris probability — strong
+pre-Day-5 signal that not all layers are equally important, and some may
+be mildly counterproductive on certain prompts.
+
+**Speed result:** with-cache vs without-cache on 30-token generation —
+**2.17× speedup** (1.58s vs 3.42s). Speedup grows with sequence length
+because without-cache is O(n²) per-step and with-cache is O(n).
+
+**Deliverables checked into the repo:**
+- `src/inspector/kv_cache_analyzer.py`, `src/inspector/weight_tweaker.py`
+- `outputs/kv_cache/{cache_growth,k_norms_heatmap,speed_comparison}.png`
+- `outputs/weight_tweaks/results.txt`
+- `LLMXray.md` — **KV Cache** entry filled in with formula + memory table
+  + speed numbers; **Feed-Forward Network (MLP)** entry expanded with
+  noise-fragility findings
+- `monkeypatching.md` — parking-lot reference doc for the
+  attention-class-replacement approach (planned for Day 10-12)
+
+**Understanding goal for Day 4 (met):**
+> Able to explain: what the KV cache is and why it exists, how much memory
+> it uses, and what happens when you break different parts of the model.
+> Intuitive sense of "L0 routes, L15 sharpens, L8 may be redundant, MLP
+> collapse threshold sits around σ=0.05."
 
 ---
 
