@@ -133,6 +133,21 @@ Use latest stable PyTorch (2.5+, MPS built in). Python 3.11.x or 3.12.x.
 
 ---
 
+## Environment / How to run
+
+**venv lives at `~/venvs/llama-xray/`** (moved out of project folder April 27, 2026 so Cursor's language server doesn't index torch's 1.2GB of files).
+
+| Action | Command |
+|---|---|
+| Activate venv interactively | `source ~/venvs/llama-xray/bin/activate` |
+| Run a Python module directly | `~/venvs/llama-xray/bin/python -m src.inspector.logit_lens` |
+| Run a notebook | `~/venvs/llama-xray/bin/jupyter notebook notebooks/02_logit_lens.ipynb` |
+| Required env vars (set in `~/.zshrc`) | `PYTORCH_ENABLE_MPS_FALLBACK=1`, `HF_HOME=~/models/hf-weights` |
+
+Inside Cursor: when running notebooks, select kernel `~/venvs/llama-xray/bin/python`.
+
+---
+
 ## Test Prompts
 
 Used consistently across all experiments for fair comparison.
@@ -180,9 +195,9 @@ TEST_PROMPTS = {
 > needs to know about the state of the project after Day 1.
 
 **State after Day 1:**
-- **Environment ready:** pyenv 2.6.27, Python 3.11.9 pinned, `./venv/` with torch 2.11.0 + transformers 5.6.2 + huggingface_hub 1.11.0 + full Jupyter/ML stack installed. MPS verified working. `PYTORCH_ENABLE_MPS_FALLBACK=1` in `~/.zshrc`.
+- **Environment ready:** pyenv 2.6.27, Python 3.11.9 pinned, venv at **`~/venvs/llama-xray/`** (moved out of project folder on April 27, 2026 to keep Cursor's language server from indexing the 1.2GB venv) with torch 2.11.0 + transformers 5.6.2 + huggingface_hub 1.12.0 + full Jupyter/ML stack installed. MPS verified working. `PYTORCH_ENABLE_MPS_FALLBACK=1` in `~/.zshrc`.
 - **HF auth done:** account active, Llama 3.2 1B access approved, Read token `llama-xray-mac-mini` saved. `HF_HOME=~/models/hf-weights` in `~/.zshrc` — all HF models land there (not the default `~/.cache/huggingface/`).
-- **Model loaded successfully on MPS:** `./venv/bin/python -m src.inspector.model_loader` runs end-to-end. Loads in ~3s from `~/models/hf-weights/` after the initial download. `pick_device()` helper in `src/inspector/model_loader.py` auto-selects MPS → CUDA → CPU.
+- **Model loaded successfully on MPS:** `~/venvs/llama-xray/bin/python -m src.inspector.model_loader` runs end-to-end. Loads in ~3s from `~/models/hf-weights/` after the initial download. `pick_device()` helper in `src/inspector/model_loader.py` auto-selects MPS → CUDA → CPU.
 - **Architecture documented** (committed to memory via `LLMXray.md`): 16 `LlamaDecoderLayer`s stacked. Each layer = `self_attn` (q/k/v/o_proj) + `mlp` (gate/up/down_proj, SwiGLU) + 2 RMSNorms. Plus `embed_tokens` (128256 × 2048) at start and `lm_head` at end. Config: hidden=2048, heads=32, KV heads=8 (Grouped Query Attention), MLP intermediate=8192, vocab=128256, max_position=131072. Total ≈ 1.24B params FP16.
 - **Tokenization understood** (write-up in `LLMXray.md`): Llama uses BPE subword tokenization over a 128,256-token vocab. `<|begin_of_text|>` (id 128000) is prepended automatically. Common words are one token (`"Paris"`, `"hello"`); rare words split (`"understanding"` → `["under", "standing"]`, `"pneumonia"` → `["p", "neum", "onia"]`). Leading spaces are part of tokens (` is`, ` the`).
 - **Sanity check passed:** generating from `"The capital of France is"` produces coherent English about the Eiffel Tower and Louvre.
@@ -737,7 +752,7 @@ TEST_PROMPTS = {
 **Do NOT copy the Intel pins — use latest PyTorch with MPS support.**
 - [ ] `brew install pyenv` (verify `pyenv --version`)
 - [ ] `pyenv install 3.11.9` then `pyenv local 3.11.9` (Python 3.12.x also fine; avoid 3.13+ for now)
-- [ ] `python3 -m venv venv && source venv/bin/activate`
+- [ ] `mkdir -p ~/venvs && python3 -m venv ~/venvs/llama-xray && source ~/venvs/llama-xray/bin/activate` (venv lives outside project folder so Cursor's language server doesn't index torch)
 - [ ] `pip install -r requirements.txt` — this picks up current stable PyTorch (2.5+) with MPS built in. Do NOT pin to 2.2.2.
 - [ ] Verify MPS: `python -c "import torch; print(torch.backends.mps.is_available())"` → must print `True`
 - [ ] Add `export PYTORCH_ENABLE_MPS_FALLBACK=1` to `~/.zshrc`, then `source ~/.zshrc`

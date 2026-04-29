@@ -1,0 +1,11 @@
+{
+  "python.analysis.exclude": ["venv/**", "**/__pycache__/**"],
+  "python.analysis.indexing": false,
+  "python.analysis.diagnosticMode": "off",
+  "editor.quickSuggestions": {
+    "comments": "off",
+    "strings": "off",
+    "other": "off"
+  },
+  "editor.suggestOnTriggerCharacters": false
+}
