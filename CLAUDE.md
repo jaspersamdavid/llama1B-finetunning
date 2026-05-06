@@ -10,7 +10,7 @@
 **Name:** llama-xray
 **Model:** Llama 3.2 1B (FP16, ~2GB)
 **Machine:** Mac Mini M4 — 10-core CPU, 10-core GPU, 16GB unified memory (PyTorch MPS backend for GPU acceleration)
-**Duration:** 15 working days (April 23 – May 13, 2026, excluding weekends)
+**Duration:** 15 working days (April 23 – May 20, 2026, excluding weekends)
 **Repository:** `llama-xray/`
 
 ### Goals
@@ -25,8 +25,10 @@
 
 ## Current Status
 
-> **Last updated:** April 29, 2026 (end of Day 4)
-> **Currently working on:** Day 4 complete ✅. Next session: Day 5 — Layer Importance Scoring (Track A — Pruning, Phase 2A).
+> **Last updated:** May 5, 2026
+> **Currently working on:** Day 4 complete ✅. Next session: Day 5 — Layer Importance Scoring (Track A — Pruning, Phase 2A) on Wednesday May 6, 2026.
+>
+> **Schedule shift:** original plan had Day 5 on Apr 30. Picking back up May 6, so Days 5-15 shifted forward by one week. New end date: May 20, 2026 (weekends still excluded).
 >
 > **Inspector toolkit complete** (Days 1-4): `model_loader.py`, `logit_lens.py`,
 > `attention_visualizer.py`, `embedding_explorer.py`, `kv_cache_analyzer.py`,
@@ -44,7 +46,7 @@
 >   noise-fragility table.
 > - `monkeypatching.md` parked for Days 10-12.
 >
-> **Next session — Day 5 (Thursday April 30, 2026):**
+> **Next session — Day 5 (Wednesday May 6, 2026):**
 > 1. Build `src/pruning/layer_importance_scorer.py` with three scoring methods:
 >    (1) logit-lens delta, (2) zero-out impact, (3) cosine similarity input vs
 >    output
@@ -201,17 +203,17 @@ TEST_PROMPTS = {
 
 ---
 
-### Day 2 — Friday, April 24, 2026
+### Day 2 — Friday, April 24, 2026 ✅ COMPLETED
 **Phase 1A: Logit Lens + Understanding Attention**
 
-- [ ] **Learn: Attention mechanism from scratch**
+- [x] **Learn: Attention mechanism from scratch**
   - What is Q (Query), K (Key), V (Value)?
   - Analogy: Q = "what am I looking for?", K = "what do I contain?", V = "what info do I give?"
   - How scores are computed: Q × K → softmax → multiply by V
   - What multi-head attention means: 32 smaller attention operations running in parallel
   - Each head can learn a different pattern (grammar, meaning, position, etc.)
   - Write this up in `LLMXray.md`
-- [ ] Build `logit_lens.py`:
+- [x] Build `logit_lens.py`:
   - Input: prompt string
   - Process: run model with `output_hidden_states=True`
   - At each of the 17 hidden states (embedding + 16 layers):
@@ -219,14 +221,14 @@ TEST_PROMPTS = {
     - Project through `model.lm_head` (and `model.model.norm` for proper normalization)
     - Get top-5 predicted words and their probabilities
   - Output: printed table showing layer-by-layer predictions
-- [ ] Run logit lens on ALL test prompts from the test suite
-- [ ] **Key observation:** For "The capital of France is" — at which layer does "Paris" first appear?
-- [ ] **Key observation:** For "2 + 2 =" — at which layer does "4" first appear?
-- [ ] **Key observation:** Are some prompts "solved" early (layer 4-5) while others need all 16 layers?
-- [ ] Create visualization: heatmap with layers on X axis, top-5 tokens on Y axis, probability as color
-- [ ] Save all visualizations to `outputs/logit_lens/`
-- [ ] **Concept note:** Write the "Attention (Q, K, V)", "Multi-Head Attention", and "Logit Lens" entries in `LLMXray.md`
-- [ ] Commit: "Day 2: Logit lens built, attention mechanism understood"
+- [x] Run logit lens on ALL test prompts from the test suite
+- [x] **Key observation:** For "The capital of France is" — at which layer does "Paris" first appear?
+- [x] **Key observation:** For "2 + 2 =" — at which layer does "4" first appear?
+- [x] **Key observation:** Are some prompts "solved" early (layer 4-5) while others need all 16 layers?
+- [x] Create visualization: heatmap with layers on X axis, top-5 tokens on Y axis, probability as color
+- [x] Save all visualizations to `outputs/logit_lens/`
+- [x] **Concept note:** Write the "Attention (Q, K, V)", "Multi-Head Attention", and "Logit Lens" entries in `LLMXray.md`
+- [x] Commit: "Day 2: Logit lens built, attention mechanism understood"
 
 **Understanding goal for Day 2:**
 > By end of day, you should be able to explain: how attention works (Q×K→scores→softmax→×V),
@@ -235,15 +237,15 @@ TEST_PROMPTS = {
 
 ---
 
-### Day 3 — Monday, April 27, 2026
+### Day 3 — Monday, April 27, 2026 ✅ COMPLETED
 **Phase 1B: Attention Visualizer + Embedding Explorer**
 
-- [ ] Build `attention_visualizer.py`:
+- [x] Build `attention_visualizer.py`:
   - Run model with `output_attentions=True`
   - For each layer × head: extract attention matrix (which words attend to which)
   - Generate heatmap: rows = tokens (from), columns = tokens (to), color = attention score
   - Save attention maps for all test prompts
-- [ ] **Experiment: Head pattern identification**
+- [x] **Experiment: Head pattern identification**
   - Run 5+ different prompts through the model
   - For each head, look at its attention pattern across all prompts
   - Identify heads by type:
@@ -252,20 +254,20 @@ TEST_PROMPTS = {
     - "Semantic head" — content words attend to related content words
     - "Position head" — fixed positional pattern regardless of content
   - Document which heads (layer X, head Y) do what
-- [ ] Build `embedding_explorer.py`:
+- [x] Build `embedding_explorer.py`:
   - Load embedding table: `model.model.embed_tokens.weight` (128,256 × 2,048)
   - `find_similar(word, top_k=20)` — cosine similarity against all embeddings
   - `compare(word1, word2)` — similarity score between two words
   - `cluster_words(word_list)` — 2D PCA/t-SNE projection of a word group
-- [ ] **Experiment: Embedding space exploration**
+- [x] **Experiment: Embedding space exploration**
   - Run `find_similar("Python")` — are Java, JavaScript, code nearby?
   - Run `find_similar("sun")` — are moon, star, solar nearby?
   - Run `find_similar("king")` — is queen nearby? (classic word2vec test)
   - Cluster programming terms and plot in 2D
   - Cluster animal terms and plot in 2D
-- [ ] Save all visualizations to `outputs/attention_maps/` and `outputs/embeddings/`
-- [ ] **Concept note:** Write the "Embeddings" entry in `LLMXray.md`
-- [ ] Commit: "Day 3: Attention visualizer + embedding explorer built"
+- [x] Save all visualizations to `outputs/attention_maps/` and `outputs/embeddings/`
+- [x] **Concept note:** Write the "Embeddings" entry in `LLMXray.md`
+- [x] Commit: "Day 3: Attention visualizer + embedding explorer built"
 
 **Understanding goal for Day 3:**
 > By end of day, you should be able to explain: what embeddings are (a lookup table where each
@@ -338,7 +340,7 @@ because without-cache is O(n²) per-step and with-cache is O(n).
 
 ---
 
-### Day 5 — Wednesday, April 29, 2026
+### Day 5 — Wednesday, May 6, 2026
 **Phase 2A: Layer Importance Scoring**
 
 - [ ] Build `layer_importance_scorer.py` with three scoring methods:
@@ -371,7 +373,7 @@ because without-cache is O(n²) per-step and with-cache is O(n).
 
 ---
 
-### Day 6 — Thursday, April 30, 2026
+### Day 6 — Thursday, May 7, 2026
 **Phase 2B: Sequential Layer Removal — Experiments**
 
 - [ ] Build `layer_pruner.py`:
@@ -402,7 +404,7 @@ because without-cache is O(n²) per-step and with-cache is O(n).
 
 ---
 
-### Day 7 — Friday, May 1, 2026
+### Day 7 — Friday, May 8, 2026
 **Phase 2C: Smart Pruning + Skip Connections**
 
 - [ ] **Experiment 3 — Remove least important first:**
@@ -432,7 +434,7 @@ because without-cache is O(n²) per-step and with-cache is O(n).
 
 ---
 
-### Day 8 — Monday, May 4, 2026
+### Day 8 — Monday, May 11, 2026
 **Phase 2D: Pruning Results Analysis + Speed Benchmarks**
 
 - [ ] For each pruning configuration that maintains 75%+ quality:
@@ -469,7 +471,7 @@ because without-cache is O(n²) per-step and with-cache is O(n).
 
 ---
 
-### Day 9 — Tuesday, May 5, 2026
+### Day 9 — Tuesday, May 12, 2026
 **Phase 3A: KV Cache Profiling**
 
 - [ ] Build `cache_profiler.py`:
@@ -500,7 +502,7 @@ because without-cache is O(n²) per-step and with-cache is O(n).
 
 ---
 
-### Day 10 — Wednesday, May 6, 2026
+### Day 10 — Wednesday, May 13, 2026
 **Phase 3B: Attention Sink Analysis + Basic Eviction**
 
 - [ ] **Learn: Attention Sinks**
@@ -530,7 +532,7 @@ because without-cache is O(n²) per-step and with-cache is O(n).
 
 ---
 
-### Day 11 — Thursday, May 7, 2026
+### Day 11 — Thursday, May 14, 2026
 **Phase 3C: Advanced Eviction + Cache Quantization**
 
 - [ ] Build Strategy 3 — Importance-based eviction:
@@ -557,7 +559,7 @@ because without-cache is O(n²) per-step and with-cache is O(n).
 
 ---
 
-### Day 12 — Friday, May 8, 2026
+### Day 12 — Friday, May 15, 2026
 **Phase 3D: Combined Optimization + Track B Results**
 
 - [ ] Combine the best strategies from Days 10-11:
@@ -597,7 +599,7 @@ because without-cache is O(n²) per-step and with-cache is O(n).
 
 ---
 
-### Day 13 — Monday, May 11, 2026
+### Day 13 — Monday, May 18, 2026
 **Phase 4A: Interactive Dashboard**
 
 - [ ] Build a visualization dashboard (Streamlit or HTML/React):
@@ -612,7 +614,7 @@ because without-cache is O(n²) per-step and with-cache is O(n).
 
 ---
 
-### Day 14 — Tuesday, May 12, 2026
+### Day 14 — Tuesday, May 19, 2026
 **Phase 4B: Portfolio Writeup + README**
 
 - [ ] Write comprehensive README.md:
@@ -668,7 +670,7 @@ because without-cache is O(n²) per-step and with-cache is O(n).
 
 ---
 
-### Day 15 — Wednesday, May 13, 2026
+### Day 15 — Wednesday, May 20, 2026
 **Phase 4C: Final Review + Future Work**
 
 - [ ] End-to-end test: clone repo fresh, install deps, run all notebooks, verify outputs
@@ -793,5 +795,6 @@ After completing any task:
 4. Add any problems to **Blockers** table
 5. When you learn a new concept, write it up in `LLMXray.md` (not here)
 6. Commit the updated CLAUDE.md with a descriptive message
+7. **After every commit, append today's section to `monkeypatchknowledge.md`** — capture what we learned that's relevant to the future Day 10-12 attention monkey-patching work (tensor shapes, layer importance, cache plumbing, debug tools). The lens is: *what would the future patch-writer want to know about today's experiments?*
 
 This file is the single source of truth for the project's progress and learnings.
