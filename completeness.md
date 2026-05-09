@@ -12,6 +12,306 @@
 
 ---
 
+## Day 7 — Friday, May 8, 2026 ✅
+
+**Phase 2C: Smart Pruning + Skip Connections**
+
+> Run on May 8 immediately after Day 6 in the same session. Day 7 compute:
+> ~75 sec for smart pruning + ~65 sec for the 30-step learnable-skip
+> training, ~3 minutes total. Both experiments depend on Day 5's saved
+> npz and Day 6's saved csv.
+
+### smart_pruning.py
+- [x] Build `src/pruning/smart_pruning.py` with both experiments + comparison reports.
+
+### Experiment 3 — Smart pruning (least-important first via Day 5 ranking)
+- [x] Load Day 5 ranking from `outputs/pruning_results/layer_importance_scores.npz`
+- [x] Reverse to get least-important order: `[12, 7, 6, 9, 8, 4, 5, 10, 13, 11, 15, 2, 14, 3, 1, 0]`
+- [x] Run `evaluate()` after each progressive removal (16 down to 8 layers)
+
+| Layers remaining | Removed | Exact% | Top-5% | BaseProb | RepRate |
+|---|---|---|---|---|---|
+| 16 | (baseline) | 100.0 | 100.0 | 0.403 | 0.247 |
+| 15 | 12 | 64.7 | 100.0 | 0.273 | 0.282 |
+| 14 | 12, 7 | 41.2 | 76.5 | 0.196 | 0.290 |
+| 13 | 12, 7, 6 | 41.2 | 76.5 | 0.138 | 0.412 |
+| 12 | 12, 7, 6, 9 | 11.8 | 47.1 | 0.072 | 0.267 |
+| 11 | 12, 7, 6, 9, 8 | 11.8 | 47.1 | 0.054 | 0.310 |
+| 10 | 12, 7, 6, 9, 8, 4 | 17.6 | 41.2 | 0.059 | 0.200 |
+| 9 | 12, 7, 6, 9, 8, 4, 5 | 11.8 | 29.4 | 0.069 | 0.314 |
+| 8 | 12, 7, 6, 9, 8, 4, 5, 10 | 5.9 | 23.5 | 0.033 | 0.204 |
+
+### Head-to-head — end removal vs smart removal (Day 6 Exp 1 vs Day 7 Exp 3)
+
+| Layers | End-removal exact% | Smart-removal exact% | Δ |
+|---|---|---|---|
+| 16 | 100.0 | 100.0 | +0.0 |
+| 15 | 52.9 | 64.7 | +11.8 |
+| 14 | 23.5 | 41.2 | +17.6 |
+| 13 | 11.8 | 41.2 | +29.4 |
+| 12 | 23.5 | 11.8 | -11.8 |
+| 11 | 11.8 | 11.8 | +0.0 |
+| 10 | 0.0 | 17.6 | +17.6 |
+| 9 | 0.0 | 11.8 | +11.8 |
+| 8 | 0.0 | 5.9 | +5.9 |
+
+**Smart-removal beats end-removal by avg +9pp** across the curve. Largest
+gain at 13 layers (+29pp). Single regression at 12 layers (-12pp) is
+another instance of the non-monotonic layer interactions seen on Day 6.
+**Neither strategy crosses the 75% threshold at any sub-16 layer count.**
+
+### Experiment 4 — Learnable skip weights (distillation)
+- [x] Build `SkippableLayer` wrapper class:
+  ```python
+  class SkippableLayer(nn.Module):
+      def __init__(self, original_layer):
+          super().__init__()
+          self.layer = original_layer
+          self.skip_logit = nn.Parameter(torch.tensor(4.0))  # sigmoid(4) ≈ 0.982
+      @property
+      def skip_weight(self):
+          return torch.sigmoid(self.skip_logit)
+      @property
+      def self_attn(self):                                    # exposed for cache indexing
+          return self.layer.self_attn
+      def forward(self, hidden_states, *args, **kwargs):
+          out = self.layer(hidden_states, *args, **kwargs)
+          w = self.skip_weight
+          if isinstance(out, tuple):
+              return (w * out[0] + (1-w) * hidden_states,) + out[1:]
+          return w * out + (1-w) * hidden_states
+  ```
+- [x] Pre-compute teacher logits: for each test prompt, generate 25 baseline
+  tokens then run a final teacher-mode forward, store the logits as KL target
+- [x] Wrap all 16 decoder layers in SkippableLayer. Initial `skip_logit = 4`
+  → `skip_weight ≈ 0.982` so initial student behavior ≈ teacher (KL ≈ 0).
+- [x] Freeze ALL parameters except the 16 `skip_logit`s
+- [x] Train 30 steps with Adam (lr=0.1), loss = KL(student || teacher) + 0.05 * mean(skip_weight)
+- [x] Read off final skip weights
+
+### Learned skip weights (after 30 steps)
+
+| Layer | Learned w | Day 5 combined | Verdict |
+|---|---|---|---|
+| 0 | 0.9845 | 0.7854 | kept |
+| 1 | 0.9775 | 0.7488 | kept |
+| 2 | 0.9720 | 0.2552 | kept |
+| 3 | 0.9755 | 0.3316 | kept |
+| **4** | **0.9967** | 0.1799 | kept (most-kept) |
+| 5 | 0.9813 | 0.1833 | kept |
+| 6 | 0.9698 | 0.1457 | kept |
+| 7 | 0.9699 | 0.1353 | kept |
+| 8 | 0.9786 | 0.1787 | kept |
+| 9 | 0.9851 | 0.1528 | kept |
+| 10 | 0.9729 | 0.1860 | kept |
+| 11 | 0.9702 | 0.2334 | kept |
+| **12** | **0.9595** | 0.0720 | kept (least-kept) |
+| 13 | 0.9684 | 0.2170 | kept |
+| 14 | 0.9750 | 0.3116 | kept |
+| 15 | 0.9751 | 0.2452 | kept |
+
+**Spearman ρ between learned skip weight and Day 5 combined importance: 0.285**
+(moderate). All 16 weights ended up in the band [0.96, 1.00] — **no layer
+was actually skipped**. λ_L1 = 0.05 was too weak vs the KL gradient.
+
+### Notable findings
+
+1. **Smart pruning is bounded but real.** Day 5's ranking-driven removal
+   beats naive end-removal by avg +9pp across the curve. The Day 5
+   importance scores ARE predictive — they just aren't strong enough to
+   change the headline finding (no config holds 75%).
+
+2. **The learnable-skip experiment confirms Day 6's "everything matters."**
+   Even with full gradient access and 30 distillation steps, the model
+   keeps every weight near 1.0. The KL gradient against the teacher
+   pulls every weight up; nothing wants to drop. This is independent
+   evidence that the 1B model's layers are densely needed.
+
+3. **L4 is the most "needed" layer per Day 7's gradient signal** (highest
+   learned weight = 0.9967). Day 6 also identified L4 as the best single
+   mid-removal (71% exact match — closest to threshold among single
+   removals). Both findings independently point at L4 being load-bearing.
+   Day 5's manual scoring placed L4 mid-pack (0.18) — a partial miss.
+   **Lesson:** when verification signals conflict, gradient-based / direct-
+   ablation signals beat manual scoring on disagreements.
+
+4. **L12 is consistently the most "skippable" layer** across all three
+   methods that ranked it: Day 5 combined (rank 16/16, score 0.072),
+   Day 6 Exp 1 (drop L12-15 less damaging than drop L13-15, suggesting
+   L12 itself contributes little), Day 7 learned skip (lowest weight at
+   0.9595). **For Days 10-12 cache eviction:** L12 is the most
+   patch-friendly layer.
+
+5. **No 75% config exists at any sub-16 layer count.** Best 15-layer
+   config across all four strategies tested:
+   - Smart drop L12 (Day 7): **65%**
+   - End drop L15 (Day 6 Exp 1): **53%**
+   - Mid single drop L4 (Day 6 Exp 2): **71%** ← best 15-layer config
+   - Mid single drop L11 (Day 6 Exp 2): 41%
+
+   The L4 result is the closest the project came to the 75% mark. Still
+   under. **Track A's premise of "minimum viable layer count" needs
+   reframing for Day 8** — for the 1B model the minimum is 16.
+
+### Tooling now available for Days 8 / 10-12
+- `SkippableLayer` is a clean template for any future patch that wraps
+  (not replaces) a decoder layer. Useful for layer-level monkey-patches
+  that need to run alongside the original layer.
+- `learnable_skip_experiment()` is a reusable distillation training
+  driver — change the loss term to fit any future "train one parameter,
+  freeze the rest" pattern (e.g. learnable cache eviction thresholds
+  on Day 11).
+- `outputs/pruning_results/day7_skip_weights.csv` — per-layer learned
+  skip weight + Day 5 importance scores side by side, for any
+  cross-experiment comparisons.
+- `outputs/pruning_results/day7_strategies_compared.png` —
+  end/smart/mid-single curves on one axis.
+
+### Concept notes added
+- `monkeypatchknowledge.md` — Day 7 section captures the wrapper-class
+  patterns (kwargs pass-through, `@property` for attribute exposure,
+  tuple/tensor return guard), the selective-freeze pattern for surgical
+  training, and the verification-signal hierarchy lesson (gradient/
+  ablation > manual scoring on disagreements).
+
+### Deliverables checked into the repo
+- `src/pruning/smart_pruning.py`
+- `outputs/pruning_results/day7_smart_curve.csv`
+- `outputs/pruning_results/day7_skip_weights.csv`
+- `outputs/pruning_results/day7_strategies_compared.png`
+- `outputs/pruning_results/day7_learned_skip_weights.png`
+- `CLAUDE.md` — Day 7 marked complete, Current Status updated, Pruning
+  observation table extended with smart and learnable-skip rows
+- `monkeypatchknowledge.md` — Day 7 section added
+
+---
+
+## Day 6 — Friday, May 8, 2026 ✅
+
+**Phase 2B: Sequential Layer Removal — Experiments**
+
+> Run on May 8 immediately after Day 5 in the same session. Total Day 6 compute:
+> ~3 minutes on Mac Mini M4 MPS (17 configs × 17 prompts × 1 baseline forward
+> + 1 generation pass each).
+
+### layer_pruner.py
+- [x] Build `src/pruning/layer_pruner.py` — `LayerPruner` class
+- [x] Reference-only ModuleList swap (no deep copy of model weights — saves ~2 GB)
+- [x] `prune(layer_indices)` rebuilds `model.model.layers` as a smaller ModuleList
+  containing references to the surviving original layers; updates
+  `model.config.num_hidden_layers`
+- [x] `reset()` restores the original 16-layer list
+- [x] **Critical fix:** renumber `layer.self_attn.layer_idx` to be sequential
+  0..N-1 after pruning. `transformers.DynamicCache` indexes K/V slots by
+  `layer.self_attn.layer_idx`, and middle removal otherwise causes
+  `IndexError: list index out of range` because the surviving last layer
+  still thinks it's idx 15 while cache only has 15 slots (0-14).
+- [x] `skip_layer_inplace()` exposed as the equivalent zero-the-weights
+  primitive — confirmed in Day 5 to be functionally identical to skipping
+  thanks to pre-norm residual.
+
+### eval_pruned.py
+- [x] Build `src/pruning/eval_pruned.py` with metrics evaluator
+- [x] **Metrics computed per (config, prompt):**
+  - `exact_match_pct`: pruned top-1 token == baseline top-1 token
+  - `top5_pct`: baseline top-1 still in pruned model's top-5
+  - `mean_baseline_prob`: average prob the pruned model assigns to the
+    baseline top-1 token (proxy for confidence; replaces perplexity)
+  - `repetition_rate`: in 15 greedy-decoded tokens, fraction NOT unique
+    (proxy for coherence collapse; high = looping output)
+- [x] Baseline forward + 15-token generation locked in once per prompt
+- [x] Two experiments run sequentially with `LayerPruner` providing prune/reset
+
+### Experiment 1 — Remove from the end (progressive)
+
+| Layers remaining | Removed | Exact% | Top-5% | BaseProb | RepRate |
+|---|---|---|---|---|---|
+| 16 | (baseline) | 100.0 | 100.0 | 0.403 | 0.247 |
+| 15 | L15 | 52.9 | 82.4 | 0.347 | 0.173 |
+| 14 | L14-15 | 23.5 | 64.7 | 0.149 | 0.412 |
+| 13 | L13-15 | 11.8 | 35.3 | 0.088 | 0.490 |
+| 12 | L12-15 | 23.5 | 29.4 | 0.094 | 0.659 |
+| 11 | L11-15 | 11.8 | 17.6 | 0.003 | 0.667 |
+| 10 | L10-15 | 0.0 | 5.9 | 0.000 | 0.616 |
+| 9 | L9-15 | 0.0 | 0.0 | 0.000 | 0.573 |
+| 8 | L8-15 | 0.0 | 0.0 | 0.000 | 0.498 |
+
+### Experiment 2 — Remove from the middle (single-layer ablation)
+
+| Layer removed | Exact% | Top-5% | BaseProb | RepRate |
+|---|---|---|---|---|
+| L4 | 70.6 | 88.2 | 0.334 | 0.333 |
+| L5 | 52.9 | 94.1 | 0.300 | 0.251 |
+| L6 | 64.7 | 94.1 | 0.312 | 0.286 |
+| L7 | 52.9 | 94.1 | 0.306 | 0.318 |
+| L8 | 64.7 | 100.0 | 0.277 | 0.282 |
+| L9 | 58.8 | 88.2 | 0.270 | 0.212 |
+| L10 | 58.8 | 76.5 | 0.218 | 0.208 |
+| L11 | 41.2 | 82.4 | 0.243 | 0.298 |
+
+### Notable findings
+
+1. **No 75%-quality config with N<16 layers.** Removing even L15 alone takes
+   exact-match to 53%, immediately below the 75% threshold. The portfolio
+   conclusion "we shrunk Llama by N layers" doesn't hold for the 1B model —
+   it's at the dense edge of what survives dense pruning.
+
+2. **Day 5's "L15 is a sharpener" was metric-dependent.** Day 5's zero-out
+   metric measured continuous prob drop on baseline top-1 token (-0.055 = small).
+   Day 6 measures the discrete outcome (is the top-1 *token* the same?) and
+   shows L15 actually decides ~half of the top-1 tokens across the 17 prompts.
+   **Lesson:** averaging probability deltas hides per-prompt token flips. Use
+   exact-match alongside prob-delta in any future verification work.
+
+3. **Best single mid-stack removal: L4** (70.6% exact match). Worst: L11
+   (41.2%). Day 5's combined ranking had L4 at score 0.18 (mid) and L11 at
+   0.23 (mid). The Day 5 ranking partially predicts the order but is far
+   from sharply accurate per-layer.
+
+4. **Non-monotonic damage in end-removal:** dropping L13-15 (12% exact)
+   is *worse* than dropping L12-15 (24% exact). Layer interactions are
+   non-additive — independently-validated removals don't compose.
+
+5. **Repetition-rate spike as collapse signal.** Repetition climbs from
+   17% (drop L15) to 67% (drop L11-15) to 50-60% (drop ≥7 trailing). This
+   is a useful proxy for "model has collapsed into token loops" — much
+   cheaper than running a full evaluation.
+
+6. **Top-5% degrades more gracefully than exact-match.** Mid-stack removals
+   keep 76-100% top-5 (except L10 at 76% and L4 at 88%). The right token
+   is usually still in contention even when not on top — useful framing
+   for "soft" quality.
+
+### Tooling now available for Day 7+
+- `LayerPruner.prune([...])` / `.reset()` — drop in any layer config
+- `evaluate(model, tokenizer, baseline_top1s, prompts)` — full 4-metric
+  scorecard for any (potentially patched/pruned) model state
+- `outputs/pruning_results/day6_results.csv` — per-config metrics for
+  cross-experiment comparison
+- `outputs/pruning_results/day6_generations.txt` — actual generated text
+  per (config, prompt) for human review when metrics are ambiguous
+
+### Concept notes added
+- `monkeypatchknowledge.md` — Day 6 section captures the `layer_idx`
+  renumbering gotcha (relevant any time we mutate the layer stack and
+  use cache), the metric-vs-discrete-outcome lesson (top-1 token flips
+  vs prob deltas), the non-additive-layer-interactions lesson (combined
+  patches need fresh validation), and the repetition-rate as cheap
+  collapse signal.
+
+### Deliverables checked into the repo
+- `src/pruning/layer_pruner.py`
+- `src/pruning/eval_pruned.py`
+- `outputs/pruning_results/day6_end_curve.png` — Exp 1 quality curve
+- `outputs/pruning_results/day6_middle_ablation.png` — Exp 2 per-layer drop
+- `outputs/pruning_results/day6_results.csv`
+- `outputs/pruning_results/day6_generations.txt` — sample outputs
+- `CLAUDE.md` — Day 6 marked complete, Current Status updated, Pruning
+  observation table filled with actual numbers
+- `monkeypatchknowledge.md` — Day 6 section added
+
+---
+
 ## Day 5 — Friday, May 8, 2026 ✅
 
 **Phase 2A: Layer Importance Scoring**

@@ -250,3 +250,206 @@ Day 5 hypothesis based on 17 prompts × 3 methods:
 
 For Day 10's eviction strategy: aggressive at L7-L12, gentle at L0-L1 and L13-L14, "free zone" at L15 (the answer is already determined — sharpening doesn't need full cache).
 
+---
+
+## Day 6 (May 8) — Sequential Layer Removal → layers are NOT independently removable
+
+### What we built
+- `src/pruning/layer_pruner.py` — `LayerPruner` class that swaps
+  `model.model.layers` to a smaller `nn.ModuleList` (refs only — no deep copy).
+- `src/pruning/eval_pruned.py` — exact-match / top-5 / baseline-prob /
+  repetition-rate metrics + two experiment drivers.
+
+### Implementation gotchas relevant to monkey-patching
+
+- **`self_attn.layer_idx` must be renumbered when you mutate the layer stack.**
+  This was the single subtle bug that broke our first run. transformers' `DynamicCache`
+  indexes K/V slots by `cache.layers[layer.self_attn.layer_idx]`. When you drop a
+  middle layer, the surviving layers retain their *original* `layer_idx` values
+  (so the last surviving layer still thinks it's idx 15 even though only 15 layers
+  remain) — and the cache, sized to `num_hidden_layers = 15`, only has slots 0-14.
+  Result: `IndexError: list index out of range`.
+
+  **Pattern for our future patches:** any monkey-patch that wraps or replaces
+  `LlamaAttention` MUST preserve `self.layer_idx` correctly, AND if the patch
+  ever runs in a context where the stack has been mutated (e.g. a Day 7
+  layer-skip experiment combined with a Day 10 cache patch), the indexing
+  must agree with whatever `cache.layers[]` was sized for.
+
+- **Removing layers actually saves compute; zeroing them does not.**
+  Day 5 confirmed `zero_layer(L)` is mathematically equivalent to skipping in
+  pre-norm. But it still runs forward through zeroed weights — same FLOPs.
+  Our `LayerPruner.prune()` actually drops the layer from the ModuleList,
+  which means the forward iterator skips it entirely. That's the difference
+  between "behaviorally equivalent" and "actually faster". For Day 10-12,
+  if our cache eviction patch wants to physically skip computation (not just
+  produce identity output), we'll need similar ModuleList manipulation, not
+  just clever attention math.
+
+### What we found — sobering reality vs Day 5's hopes
+
+**The 1B model is much less prunable than Day 5's importance scoring suggested.**
+
+| Config | Exact match | What Day 5 predicted |
+|---|---|---|
+| Baseline (16 layers) | 100% | — |
+| Drop L15 (1 from end) | **53%** | "L15 sharpens, ok to remove" |
+| Drop L14-15 (2 from end) | 24% | partial agreement (L14 was rank 4 important) |
+| Drop L13-15 (3 from end) | 12% | non-monotonic with above |
+| Drop L9-15 (7 from end) | 0% | model collapses |
+
+| Single-layer mid removal | Exact match drop |
+|---|---|
+| L4 alone (best) | 100% → 71% |
+| L11 alone (worst) | 100% → 41% |
+| L5, L7 alone | 100% → 53% |
+
+### Why this matters for the Day 10-12 patch design
+
+1. **Day 5's "L15 is a sharpener with low importance" was metric-specific.**
+   The Day 5 zero-out method averaged the *probability drop on the baseline top-1
+   token*. That's a continuous metric — a small drop (0.055) sounds tiny. But
+   when you measure the *discrete* outcome ("is the top-1 still the same token?"),
+   removing L15 flips the answer for ~half of all prompts. **Implication for our
+   patch verification: average prob deltas hide token flips. Add per-prompt
+   exact-match to the verification kit, not just average prob.**
+
+2. **Layer interactions are non-additive.** Dropping L13-15 is *worse* than
+   dropping L12-15. This means **we cannot safely combine independently-vetted
+   patches.** If a Day 10 patch is "safe at L8" and another Day 11 patch is
+   "safe at L11", running both together may not be safe. Each combined
+   patch needs its own end-to-end evaluation.
+
+3. **No "free zone" exists for removal.** Day 5 framed L15 as a free-zone
+   candidate. Day 6 disproves this. **For Day 10's cache eviction we need
+   to be more surgical than "drop layers" — we need to drop *specific cached
+   tokens* from layers, not whole-layer operations.** Window-based eviction
+   plus attention sinks (planned for Day 10) is fundamentally a finer-grained
+   intervention than layer pruning, so it has more headroom — but the
+   verification bar is the same.
+
+4. **Repetition rate is a useful collapse signal.** When the model is
+   damaged, it falls into token loops. At 4+ trailing layers removed,
+   repetition rate is 60%+. **Use this as a Day 10-12 cheap canary:** if
+   our cache eviction patch causes any test prompt to start looping in
+   the first 15 generated tokens, we know we've over-pruned without
+   needing to hand-read the output.
+
+### New tool in the verification kit
+
+`evaluate(model, tokenizer, baseline_top1s, prompts)` from
+`src/pruning/eval_pruned.py` — runs the full 17-prompt suite and returns
+the four-metric dict. Reusable as the patch-verification function for
+Day 10-12: snapshot baselines once, run patch, call evaluate, compare.
+
+### Updated layer-importance hypothesis (replaces Day 5's optimism)
+
+Day 5 hypothesis based on 17 prompts × 3 methods:
+> L0/L1 route, L12 most redundant, L15 sharpens — likely all-removable.
+
+Day 6 actuals:
+> **Llama 3.2 1B has effectively no removable layers without dropping below
+> 75% top-1 accuracy.** Even the "most redundant" layer (L12) hasn't been
+> tested in isolation yet (Day 7's job), but Day 6's mid-stack experiments
+> all damage at least 30% of prompts. The 1B model is densely packed — the
+> portfolio takeaway is "Track A reveals Llama 3.2 1B is at the lower edge
+> of what dense pruning can preserve" rather than "we shrunk it 30%".
+> For Day 10-12: this means cache reduction is the higher-headroom track.
+
+---
+
+## Day 7 (May 8) — Smart Pruning + Learnable Skip → the model votes "everything matters"
+
+### What we built
+- `src/pruning/smart_pruning.py` with two experiments:
+  - **Smart prune** — uses Day 5's ranking, removes least-important first.
+  - **`SkippableLayer`** wrapper class + distillation training loop that
+    trains a per-layer scalar gate via KL against the frozen teacher.
+
+### Implementation patterns relevant to monkey-patching
+
+- **Wrapping decoder layers without breaking the model.** `SkippableLayer`
+  is a clean template for any future patch that wants to wrap (rather
+  than replace) a `LlamaDecoderLayer`. Two key tricks:
+  1. **`*args, **kwargs` pass-through.** `LlamaDecoderLayer.forward()`
+     accepts a long list of kwargs (attention_mask, position_ids,
+     past_key_value, position_embeddings, ...). Don't reproduce the
+     signature — pass everything through. This is the same pattern
+     Day 10-12 patches will need if they wrap (rather than replace)
+     attention.
+  2. **`@property` for `self_attn`.** transformers internals look up
+     `decoder_layer.self_attn.layer_idx` for cache indexing. Exposing
+     `self_attn` as a property (not setting it as an attribute) keeps
+     identity preservation: assignments to `self.layer.self_attn.x`
+     correctly update through the wrapper.
+
+- **Tuple-vs-tensor return guard.** Some transformers versions return a
+  tuple from decoder layer forward, others return a tensor. The wrapper's
+  isinstance check handles both. **Apply this pattern to any monkey-patch
+  that wraps something whose return signature you don't fully trust.**
+
+- **Selective freeze for surgical training.**
+  ```python
+  for name, p in model.named_parameters():
+      p.requires_grad = name.endswith("skip_logit")
+  ```
+  This is the pattern for Day 11's "train just the cache eviction
+  parameters" idea if we want learnable cache shortening. Freeze
+  everything; mark only the parameters you're optimizing.
+
+### What we found
+
+**Smart pruning beats end-removal by avg +9pp.** Best gain: +29pp at 13
+layers remaining. So the Day 5 ranking IS predictive — but the
+improvement is bounded. Even smart-pruning never crosses 75% threshold.
+
+**Best 15-layer config in the project:** drop L4 alone (Day 6 mid-single,
+71% exact match). Drop L12 (Day 7 smart) is 65%. Both still under 75%.
+
+**Learnable skip experiment failed to skip anything.** All 16 weights
+converged in [0.96, 1.00] after 30 steps with λ_L1 = 0.05. The KL gradient
+(matching teacher distributions exactly) was always strong enough to
+overpower the L1 sparsity pull. **The model's own gradient signal says
+every layer is needed.** This is consistent with Day 6's finding that no
+single removal preserves quality — same fact viewed from a different
+angle (gradient-based importance vs ablation-based importance).
+
+**Spearman ρ between learned weights and Day 5 combined importance: 0.29.**
+- L12 has the LOWEST learned weight (most "skippable") → agrees with Day 5
+- L4 has the HIGHEST learned weight (most "needed") → disagrees with Day 5
+  (Day 5 ranked L4 mid-importance, score 0.18)
+
+The disagreement on L4 matters: Day 6 found L4 was the *best* single
+mid-removal (71% — closest to threshold). So Day 6 says "L4 is the
+hardest to remove without harm" and Day 7 learned-skip agrees ("L4 is
+the layer the model wants to keep most"). Day 5's ranking missed this
+specifically. **For Day 10-12: when verification methods conflict, lean
+on gradient-based / ablation-based signals over manual scoring.**
+
+### Track A reframe (relevant to the Day 14 portfolio writeup)
+
+The original Track A goal was: "find the minimum number of layers that
+maintains 75%+ quality." Days 6-7 establish that **for Llama 3.2 1B,
+this minimum is 16.** No layer count below 16 holds 75%.
+
+The reframed deliverable: **characterize the redundancy structure** —
+how the layers degrade under removal, which orderings are best, what
+the 1B model's "dense edge" looks like. The interesting story is the
+gap between Day 5's optimistic per-layer importance scores and the
+actual per-layer ablation damage.
+
+### Implication for Days 10-12
+
+Layer pruning gave a small win at most. **Cache reduction (Track B)
+operates at finer granularity** — we're dropping individual *cached
+tokens* rather than whole layers. That's a smaller intervention with
+more headroom. The 5%+ compute-savings target for Track B is still
+realistic; the 75% quality / N<16 target for Track A is not.
+
+**Updated patch verification kit (after Day 7):**
+- top-1 exact-match across full prompt suite (Day 6)
+- avg baseline-prob delta (Day 5 method 2)
+- 1 - cos(input, output) per layer (Day 5 method 3)
+- repetition rate as collapse canary (Day 6)
+- selective freeze pattern for any future learnable-component patches (Day 7)
+
