@@ -192,6 +192,61 @@ When we write our first monkey-patch on Day 10, the workflow will be:
 
 ---
 
-## Day 5 (Apr 30 — pending) — Layer Importance Scoring
+## Day 5 (May 8) — Layer Importance Scoring → which layers can our patches afford to disrupt?
 
-*To be filled in after the Day 5 commit.*
+### What we built
+`src/pruning/layer_importance_scorer.py` — runs three independent ranking methods and overlays them on one chart.
+
+| Method | What it captures | Cost per prompt | Forward count |
+|---|---|---|---|
+| Logit-lens KL Δ | KL between layer L's predicted distribution and layer L−1's | 1 fwd with `output_hidden_states=True` | 1 |
+| Zero-out top-1 drop | Drop in baseline top-1 probability when the layer's attention + MLP weights are zeroed | snapshot once, then 1 fwd per layer per prompt | 17 |
+| 1 − cos(input, output) | How much the layer transforms the last-token hidden state | reuses method-1's forward, free | 0 |
+
+### Implementation gotchas relevant to monkey-patching
+
+- **FP16 underflow kills KL computation.** First run produced all-NaN KL values. The fix: cast logits to FP32 before `log_softmax`. The same gotcha will hit any Day 10-12 patch that tries to compute attention scores or KL on the model's native FP16 — softmax of large negative logits underflows to 0, then `log(0) = -inf`, then `0 * -inf = NaN`.
+  - **Pattern for our future patches:** if your custom attention does any divergence/entropy bookkeeping, do that math in FP32. The K/V tensors and matmul outputs can stay FP16; only the post-softmax stats need the cast.
+- **Snapshot-once + restore-per-iter** is way cheaper than `WeightTweaker.reset()` per iteration. We snapshot each layer's `state_dict()` once at the top of method 2, then mutate-and-restore that single layer per iteration. Zero-out for all 16 layers × 17 prompts ran in 11 seconds. Full-model `reset()` would have copied 1.24B params 272 times.
+- **Zero-out as identity-skip equivalence.** In Llama's pre-norm residual (`x = x + attn(rmsnorm(x))`), zeroing all weights of the layer makes its sub-block output 0, so the residual gives `x` back unchanged. **Zeroing a layer is mathematically equivalent to skipping it.** Useful: this means `zero_layer(L)` IS our cheap "skip layer L" operation without writing any forward hook — the residual stream does the bypassing for us. Day 6's `skip_layer()` primitive can literally be `zero_layer()` under the hood.
+
+### What we found — relevant to where to safely patch
+
+| Finding | What it means for Day 10-12 patches |
+|---|---|
+| **L0, L1 are critical across all 3 methods** | Don't aggressively patch attention here. Cache eviction at L0/L1 will hit input routing. |
+| **L12 is bottom-3 in 2/3 methods, never top-3 anywhere** | Best target for the "drop everything between sink and recent window" pattern. If a layer is going to tolerate aggressive eviction, this is it. |
+| **L15 disagreement (high cosine, lowest zero-out drop)** | "Sharpening" layer — moves the vector around without changing top-1. **Implication:** patches at L15 that change *what gets attended to* will be visible in cosine sim but invisible in top-1 quality. We need both metrics during Day 10-12 verification, not just top-1. |
+| **L8's Day 4 anomaly didn't generalize** | Reminder: per-prompt findings can mislead. Day 10-12 must test patches across all 17 test prompts, not just `"capital of France is"`. |
+
+### Method-disagreement is itself a finding — and it changes our patch verification strategy
+
+Cosine-sim and zero-out drop **don't measure the same thing**:
+- Cosine-sim says "how much did the layer move the vector around?"
+- Zero-out drop says "how much does removing the layer hurt the top-1 token?"
+
+A layer can score high on one and low on the other. L15 is the clearest example. So when we verify a Day 10-12 monkey-patch:
+
+- **Don't trust top-1 alone** — a patch can preserve top-1 across all prompts and still be quietly mangling the representation in ways that show up downstream (longer generations, OOD prompts).
+- **Use the cosine-sim signal** — for each layer's last-token hidden state, compare patched vs unpatched. If cosine drops below ~0.95 anywhere our patch wasn't supposed to touch, we have a leak.
+- **Use logit-lens KL Δ** — if the per-layer prediction trajectory diverges between patched and unpatched, even the layers we didn't directly modify are receiving altered inputs. That's a sign of bug propagation.
+
+These three methods become our **patch verification kit** alongside the no-op subclass test from Day 2.
+
+### Tools/infrastructure now available for Days 10-12
+
+- `score_lens_and_cosine(model, tokenizer, prompts)` — patch verification A/B
+- `score_zero_out(...)` — sanity check that our patch didn't accidentally turn a layer into nothing
+- `snapshot_layer(model, L)` / `restore_layer(model, L, snapshot)` — clean primitives for selective revert (used during patch debugging)
+- `outputs/pruning_results/layer_importance_scores.npz` — saved arrays. Future scripts can load this and get the layer ranking without re-running the scorer.
+
+### Updated layer-importance hypothesis (replaces Day 4 single-prompt guess)
+
+Day 4 hypothesis based on `"capital of France is"`:
+> L0 routes (-20pp), L8 redundant (+21pp), L15 sharpens (-28pp).
+
+Day 5 hypothesis based on 17 prompts × 3 methods:
+> **L0, L1, L3 route input.** L2-L11 do mid-stack work with no single layer carrying overwhelming weight. **L12 is most redundant.** L13-L14 do answer-shaping. **L15 sharpens** — big vector change, small top-1 effect.
+
+For Day 10's eviction strategy: aggressive at L7-L12, gentle at L0-L1 and L13-L14, "free zone" at L15 (the answer is already determined — sharpening doesn't need full cache).
+

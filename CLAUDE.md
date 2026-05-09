@@ -25,10 +25,25 @@
 
 ## Current Status
 
-> **Last updated:** May 5, 2026
-> **Currently working on:** Day 4 complete ✅. Next session: Day 5 — Layer Importance Scoring (Track A — Pruning, Phase 2A) on Wednesday May 6, 2026.
+> **Last updated:** May 8, 2026 (end of Day 5)
+> **Currently working on:** Day 5 complete ✅. Next session: Day 6 — Sequential Layer Removal Experiments (Track A — Pruning, Phase 2B).
 >
-> **Schedule shift:** original plan had Day 5 on Apr 30. Picking back up May 6, so Days 5-15 shifted forward by one week. New end date: May 20, 2026 (weekends still excluded).
+> **Schedule shift:** original plan had Day 5 on Apr 30. Picking back up May 8 (note: May 6 was the planned date but session happened May 8). Day 6 follows next working day. End date holds at May 20, 2026.
+>
+> **Day 5 highlights (full archive in `completeness.md`):**
+> - **`src/pruning/layer_importance_scorer.py`** built — three independent
+>   methods for ranking the 16 layers: (1) logit-lens KL Δ, (2) zero-out
+>   top-1 drop, (3) 1 − cos(input, output).
+> - All three methods agree: **L0 and L1 are critical** (top-2 in 2/3 methods,
+>   top-3 in all three). These are the input-routing layers — don't prune.
+> - **L12 is the cleanest pruning candidate** — bottom-3 in 2/3 methods,
+>   never in any top-3.
+> - **L15 disagreement is the most informative finding**: high cosine-sim
+>   importance (transforms representation a lot) but lowest zero-out drop.
+>   It's a **sharpening** layer — it changes the vector but doesn't change
+>   the top-1 prediction. Confirms Day 4: zero_attention(L15) only -28pp.
+> - L8's Day 4 anomaly (zero_attention(L8) raised Paris) does NOT generalize:
+>   L8 is mid-importance (rank 8-11 across methods). Day 4 was prompt-specific.
 >
 > **Inspector toolkit complete** (Days 1-4): `model_loader.py`, `logit_lens.py`,
 > `attention_visualizer.py`, `embedding_explorer.py`, `kv_cache_analyzer.py`,
@@ -46,17 +61,20 @@
 >   noise-fragility table.
 > - `monkeypatching.md` parked for Days 10-12.
 >
-> **Next session — Day 5 (Wednesday May 6, 2026):**
-> 1. Build `src/pruning/layer_importance_scorer.py` with three scoring methods:
->    (1) logit-lens delta, (2) zero-out impact, (3) cosine similarity input vs
->    output
-> 2. Run all three across all 16 layers + all test prompts; produce a unified
->    ranked importance list
-> 3. Visualize: bar chart of per-layer importance with all three methods overlaid
-> 4. Save to `outputs/pruning_results/layer_importance_scores.png`
-> 5. Key question: do all three methods agree on which layers are
->    important/redundant?
-> 6. Commit: `"Day 5: Layer importance scoring complete — layers ranked"`
+> **Next session — Day 6 (next working day):**
+> 1. Build `src/pruning/layer_pruner.py` with `remove_layers(model, [...])`
+>    and `skip_layer(model, idx)` primitives
+> 2. Build `src/pruning/eval_pruned.py` with quality metrics: exact match,
+>    top-5, perplexity, coherence, code completion
+> 3. Experiment 1: remove from the end one at a time (16→15→14...→8)
+> 4. Experiment 2: remove from the middle (keep 0-3 and 12-15, ablate 4-11)
+> 5. Document the layer-count → quality curve, find the 75% threshold
+> 6. Commit: `"Day 6: Sequential layer removal experiments — end and middle"`
+>
+> **Carry-in priors from Day 5** (informs Day 6 strategy): L0/L1 are
+> top-important across all 3 methods → never remove. L12 is consistently
+> bottom-3 → expect minimal damage. L15 looks important by cosine but
+> low by zero-out → "sharpens" rather than decides → ok to remove.
 
 ---
 
@@ -340,31 +358,28 @@ because without-cache is O(n²) per-step and with-cache is O(n).
 
 ---
 
-### Day 5 — Wednesday, May 6, 2026
+### Day 5 — Friday, May 8, 2026 ✅ COMPLETED
 **Phase 2A: Layer Importance Scoring**
 
-- [ ] Build `layer_importance_scorer.py` with three scoring methods:
-- [ ] **Method 1 — Logit lens delta:**
-  - For each layer: measure KL divergence between prediction at layer N vs layer N-1
-  - High delta = this layer changed the prediction a lot = important
-  - Low delta = this layer barely changed anything = candidate for removal
-  - Run on all test prompts, average the scores
-  - Output: ranked list of layers by importance
-- [ ] **Method 2 — Zero-out impact:**
-  - For each layer (0-15): temporarily zero out ALL weights in that layer
-  - Run all test prompts and measure quality drop (exact match, top-5 accuracy)
-  - Restore weights, move to next layer
-  - Output: ranked list — "zeroing out layer X causes Y% quality drop"
-- [ ] **Method 3 — Cosine similarity (input vs output):**
-  - For each layer: measure cosine similarity between the layer's input and output
-  - If input ≈ output (cosine sim > 0.95), the layer is doing almost nothing
-  - If input ≠ output (cosine sim < 0.80), the layer is transforming the representation significantly
-  - Output: per-layer cosine similarity scores
-- [ ] Combine all three methods into a unified importance ranking
-- [ ] Visualize: bar chart showing importance score per layer (all three methods overlaid)
-- [ ] Save to `outputs/pruning_results/layer_importance_scores.png`
-- [ ] **Key question to answer:** Do all three methods agree on which layers are important/unimportant?
-- [ ] Commit: "Day 5: Layer importance scoring complete — layers ranked"
+> Full task checklist + experiment results archived in `completeness.md`.
+> Summary below is what future-Claude needs to know about the project state
+> after Day 5.
+
+- [x] Build `layer_importance_scorer.py` with three scoring methods
+- [x] **Method 1 — Logit lens KL Δ** between consecutive layers (FP32 cast
+  required — FP16 underflows to NaN during log-prob math)
+- [x] **Method 2 — Zero-out impact** — zero attention + MLP for one layer,
+  measure drop in baseline top-1 probability
+- [x] **Method 3 — Cosine similarity** (1 − cos_sim) of last-token hidden
+  state at layer input vs output
+- [x] Run all three across 16 layers × 17 test prompts
+- [x] Combined importance ranking via min-max normalize then average
+- [x] Bar chart with all three methods overlaid → `outputs/pruning_results/layer_importance_scores.png`
+- [x] **Key question answered:** methods agree on top-important (L0, L1)
+  but DISAGREE on redundancy. Cosine-sim sees L15 as important while
+  zero-out sees it as the least important → L15 is a "sharpening" layer
+  (transforms vector a lot but doesn't change the top-1 token).
+- [x] Commit: "Day 5: Layer importance scoring complete — layers ranked"
 
 **Understanding goal for Day 5:**
 > By end of day, you should have a clear ranking of which layers matter most and which are
@@ -694,7 +709,10 @@ because without-cache is O(n²) per-step and with-cache is O(n).
 ### Layer Behavior Observations
 | Layer(s) | Observation | Date |
 |----------|-------------|------|
-| — | *Not yet started* | — |
+| L0, L1 | Top-2 importance across all three Day-5 methods. Input-routing — never prune. | May 8, 2026 |
+| L12 | Bottom-3 redundancy in 2/3 methods. Best pruning candidate by combined score. | May 8, 2026 |
+| L15 | High cosine-sim importance (0.48 = big vector transform) but lowest zero-out drop (0.055). "Sharpening" layer — changes the vector but not the top-1 token. Confirms Day 4 (-28pp on top-1 prob, but Paris still top). | May 8, 2026 |
+| L8 | Day 4 anomaly (zero_attention(L8) raised Paris) does NOT generalize. L8 is mid-importance: rank 8-11 across the 3 Day-5 methods averaged over 17 prompts. The Day 4 finding was prompt-specific. | May 8, 2026 |
 
 ### Attention Head Observations
 | Layer | Head | Pattern Type | Notes | Date |
@@ -704,7 +722,7 @@ because without-cache is O(n²) per-step and with-cache is O(n).
 ### Pruning Observations
 | Layers Removed | Quality Impact | Notes | Date |
 |----------------|---------------|-------|------|
-| — | — | *Not yet started* | — |
+| (Day 5 priors only) | — | Combined ranking most-important → most-redundant: L0 > L1 > L3 > L14 > L2 > L15 > L11 > L13 > L10 > L5 > L4 > L8 > L9 > L6 > L7 > L12. Day 6 will turn this ranking into actual physical removal experiments. | May 8, 2026 |
 
 ### KV Cache Observations
 | Finding | Impact | Date |

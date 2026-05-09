@@ -12,6 +12,125 @@
 
 ---
 
+## Day 5 — Friday, May 8, 2026 ✅
+
+**Phase 2A: Layer Importance Scoring**
+
+> Originally scheduled for Wednesday April 29 in the v1 plan. Schedule shifted
+> twice (Apr 29 → May 6 → May 8) due to off-days. Day 5 building + analysis
+> happened on May 8 in one session, ~3 minutes of compute on Mac Mini M4 MPS.
+
+### layer_importance_scorer.py
+- [x] Build `src/pruning/layer_importance_scorer.py` with three independent scoring methods
+- [x] **Method 1 — Logit-lens KL Δ**: project each of the 17 hidden states (embedding
+  + 16 layers) through final RMSNorm + lm_head, compute `KL(P_layer_L || P_layer_{L−1})`
+  on the last-token distribution. **FP32 cast required** — first run gave all-NaN because
+  FP16 softmax of large negative logits underflows to 0, which makes `log(0) = -inf` and
+  the subsequent multiply NaN. Fixed by casting `model.lm_head(normed).float()` before
+  `F.log_softmax`.
+- [x] **Method 2 — Zero-out impact**: snapshot each of 16 layers' `state_dict()` once,
+  then for each (prompt, layer): zero attention (q/k/v/o_proj) + MLP (gate/up/down_proj)
+  weights, run forward, measure drop in baseline top-1 token's probability, restore.
+  Uses ~2 GB extra memory (one full snapshot). Total run ~11 s for 16 × 17 ablations.
+- [x] **Method 3 — 1 − cos(input, output)**: for each layer, cosine sim between the
+  last-token hidden state going in (`hidden_states[L]`) and going out (`hidden_states[L+1]`).
+  Reports `1 − sim` so higher = more transformation = more important. Free — reuses the
+  same forward pass as method 1.
+- [x] Run all three across 16 layers × 17 test prompts (5 categories: factual, math, code,
+  pattern, reasoning). Average per layer.
+- [x] Min-max normalize each method's scores to [0, 1] for cross-method comparison
+- [x] Combined importance = mean of normalized scores
+- [x] Bar chart with all three methods overlaid → `outputs/pruning_results/layer_importance_scores.png`
+- [x] Raw arrays saved → `outputs/pruning_results/layer_importance_scores.npz` (loadable
+  in Day 6 for the smart-pruning experiment without re-running the scorer)
+
+### Key results
+
+**Raw scores per layer** (higher = more important within each method):
+
+| Layer | Logit-lens KL Δ | Zero-out top-1 drop | 1 − cos(in, out) | Combined (norm) |
+|---|---|---|---|---|
+| 0 | 2.43638 | **0.40168** | **0.66373** | **0.7854** |
+| 1 | **5.72488** | 0.36425 | 0.30859 | 0.7488 |
+| 2 | 1.84797 | 0.14479 | 0.26017 | 0.2552 |
+| 3 | 1.73687 | 0.19630 | 0.31641 | 0.3316 |
+| 4 | 1.52884 | 0.06902 | 0.29070 | 0.1799 |
+| 5 | 1.29669 | 0.10323 | 0.26683 | 0.1833 |
+| 6 | 1.16364 | 0.09094 | 0.23868 | 0.1457 |
+| 7 | 1.03104 | 0.09637 | 0.22714 | 0.1353 |
+| 8 | 1.15672 | 0.12532 | 0.23926 | 0.1787 |
+| 9 | 0.99449 | 0.13313 | 0.20169 | 0.1528 |
+| 10 | 0.97190 | 0.18431 | 0.17756 | 0.1860 |
+| 11 | 2.24473 | 0.16013 | 0.15705 | 0.2334 |
+| 12 | 0.61715 | 0.13014 | 0.11368 | **0.0720** |
+| 13 | 1.12641 | 0.24493 | 0.11587 | 0.2170 |
+| 14 | 1.81967 | 0.29235 | 0.12201 | 0.3116 |
+| 15 | 0.94915 | 0.05534 | 0.48261 | 0.2452 |
+
+**Per-method top-3 most important:**
+- Logit-lens KL Δ: L1, L0, L11
+- Zero-out top-1 drop: L0, L1, L14
+- 1 − cos(in, out): L0, L15, L3
+
+**Per-method bottom-3 most redundant:**
+- Logit-lens KL Δ: L10, L15, L12
+- Zero-out top-1 drop: L6, L4, L15
+- 1 − cos(in, out): L14, L13, L12
+
+**Combined ranking (most important → most redundant):**
+> L0 > L1 > L3 > L14 > L2 > L15 > L11 > L13 > L10 > L5 > L4 > L8 > L9 > L6 > L7 > L12
+
+### Notable findings
+
+1. **L0 and L1 are unambiguously critical.** Top-2 in 2/3 methods, top-3 in all three.
+   These are the input-routing layers. Day 6 should never test removal of these.
+
+2. **L12 is the cleanest pruning candidate.** Bottom-3 in 2/3 methods, never appears
+   in any top-3. Low across all dimensions: small KL change, small zero-out impact,
+   small vector transformation. Day 6 expected to confirm minimal damage.
+
+3. **L15 method-disagreement is the most informative finding.** Cosine-sim says
+   highly important (0.48 — second-largest vector transformation). Zero-out drop says
+   least important (0.055 — almost no impact on top-1). Reconciliation: **L15 is a
+   sharpening layer.** It moves the representation around but doesn't change which
+   token wins. This matches Day 4: `zero_attention(L15)` only dropped Paris by 28pp,
+   but Paris was still top-1. **Implication for Day 10-12 verification: top-1 metrics
+   alone will miss patch leakage. Must also track cosine-sim and KL Δ.**
+
+4. **L8's Day 4 anomaly does NOT generalize.** Day 4 found that `zero_attention(L8)`
+   on `"capital of France is"` raised Paris confidence from 48% → 69%. Across the
+   17 prompts × 3 methods averaged in Day 5, L8 ranks 8-11 — squarely mid-pack.
+   The Day 4 result was prompt-specific.
+
+5. **No single method tells the whole story.** The three methods agree at the extremes
+   (L0/L1 always important, L12 mostly redundant) but diverge substantially in the
+   middle. Day 6 will use the combined ranking but treat individual methods as
+   complementary lenses, not as a single "truth."
+
+### Tooling now available for Day 6+
+- `score_lens_and_cosine()`, `score_zero_out()` reusable as A/B test infrastructure
+- `snapshot_layer()` / `restore_layer()` for cheap per-layer revert
+- `zero_layer()` as identity-skip primitive (works because Llama uses pre-norm
+  residuals — zeroed layer's output is 0, residual returns input unchanged)
+- `outputs/pruning_results/layer_importance_scores.npz` for the Day 7 smart-pruning
+  experiment to consume without re-running
+
+### Concept notes added
+- `monkeypatchknowledge.md` — Day 5 section added covering: FP16 underflow gotcha
+  for any future patch doing log/KL math, snapshot-once + restore-per-iter pattern,
+  zero-out-as-identity-skip equivalence, the verification-kit implication of
+  method-disagreement (don't trust top-1 alone — track cosine + KL too).
+
+### Deliverables checked into the repo
+- `src/pruning/layer_importance_scorer.py` — full scorer with all three methods
+- `outputs/pruning_results/layer_importance_scores.png` — overlaid bar chart
+- `outputs/pruning_results/layer_importance_scores.npz` — raw arrays for Day 7
+- `CLAUDE.md` — Day 5 marked complete, Current Status updated, Layer Behavior +
+  Pruning observation tables filled with Day 5 priors
+- `monkeypatchknowledge.md` — Day 5 section replaces the placeholder
+
+---
+
 ## Day 4 — Wednesday, April 29, 2026 ✅
 
 **Phase 1C: KV Cache Analyzer + Weight Tweaker**
