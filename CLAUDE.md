@@ -25,8 +25,30 @@
 
 ## Current Status
 
-> **Last updated:** May 8, 2026 (end of Day 7)
-> **Currently working on:** Day 7 complete ✅. Next session: Day 8 — Pruning Results Analysis + Speed Benchmarks (Track A — Pruning, Phase 2D, closes Track A).
+> **Last updated:** May 8, 2026 (end of Day 8 — **Track A complete**)
+> **Currently working on:** Day 8 complete ✅. **Track A wrapped.** Next session: Day 9 — KV Cache Profiling (Track B — Phase 3A, begins Track B).
+>
+> **Day 8 highlights (full archive in `completeness.md`):**
+> - **`src/pruning/benchmark.py`** built — measures params, memory, TTFT,
+>   tokens/sec, and speedup for 8 representative pruning configs. Honest
+>   timing via `torch.mps.synchronize()` around every timer + warm-up
+>   forward to flush kernel-compile overhead.
+> - **Per-layer cost:** ~116 MB and ~60.8 M params per decoder layer.
+> - **Speed scales roughly linearly with layer count.** Dropping 1 layer
+>   buys ~3-4% speedup. Dropping 8 layers (collapsed model) buys 41%.
+> - **Pareto chart is empty in the top-right corner.** Best 15-layer
+>   config (drop L4) sits at 71% quality / 1.04× speedup — 4pp below
+>   the 75% threshold for 4% speed gain. No favorable trade exists.
+> - **`TRACK_A_SUMMARY.md`** written to outputs/pruning_results/ as the
+>   portfolio-ready Track A close-out.
+>
+> **Track A final verdict:** for Llama 3.2 1B, the minimum-viable layer
+> count under 75% top-1 is 16. The 1B model is at the dense edge of
+> what survives layer pruning. The portfolio claim: *the techniques
+> (importance scoring × 3, smart pruning, learnable skip) transfer to
+> bigger models that have more redundancy; the specific N<16 result is
+> a property of Llama 3.2 1B.* Track B (KV cache reduction, Days 9-12)
+> operates at finer granularity and should have more headroom.
 >
 > **Schedule shift:** original plan had Day 5 on Apr 30. Picked back up May 8 and ran Day 5 + Day 6 + Day 7 in same day. End date holds at May 20, 2026.
 >
@@ -95,25 +117,26 @@
 >   noise-fragility table.
 > - `monkeypatching.md` parked for Days 10-12.
 >
-> **Next session — Day 8 (next working day):**
-> 1. For each pruning config that maintains 75%+ quality... wait, **none
->    maintain 75%+**. Track A's premise needs reframing — the deliverable
->    becomes "characterize how Llama 3.2 1B degrades under pruning" rather
->    than "find the minimum viable layer count."
-> 2. Measure inference speed (tokens/sec), memory, and time-to-first-token
->    for the best configs we have: full 16, drop L4 alone (71%), drop L12
->    alone (65%), smart 14-layer (41%).
-> 3. Build the comparison table (layers, config, quality, speed, memory).
-> 4. Track A summary writeup: which layers are critical, which are most
->    "removable" relative to others, what the redundancy structure looks
->    like. Set up the pivot to Track B (cache reduction has more headroom).
-> 5. Commit: `"Day 8: Track A complete — pruning results analyzed and documented"`
+> **Next session — Day 9 (next working day, opens Track B):**
+> 1. Build `src/kv_optimization/cache_profiler.py`
+> 2. For each test prompt: generate 100 tokens, record per-step total cache
+>    memory, per-layer cache memory, per-cached-token total attention received
+> 3. Identify "dead" cached tokens (receive <1% of total attention)
+> 4. Plot attention heatmap (cached position × generation step)
+> 5. Memory breakdown stacked chart (weights vs activations vs cache) at
+>    various seq lengths
+> 6. Commit: `"Day 9: KV cache profiled — baseline measurements established"`
 >
-> **Carry-in priors from Day 7:** smart pruning is a real but limited gain
-> (+9pp avg over end-removal). Best single-layer removal is L4 (71% Day 6
-> Exp 2). Learnable skip showed no layer wants to be skipped — model
-> weights are densely needed. Track B (cache eviction) should have more
-> headroom because it operates at finer granularity than whole layers.
+> **Carry-in priors from Track A (Days 5-8):**
+> - L0, L1, L4 are load-bearing — give them gentler cache budgets in Day 11
+> - L12 is the most patch-friendly layer across 3 methods — start aggressive
+>   eviction here
+> - Patch verification kit: exact-match (Day 6) + per-layer cosine-sim
+>   (Day 5) + KL Δ (Day 5) + repetition rate as collapse canary (Day 6)
+> - Don't trust top-1 alone; don't trust avg prob delta alone — both miss
+>   different failure modes
+> - Layer interactions are non-additive — combined patches need fresh
+>   end-to-end validation, not just composition of validated parts
 
 ---
 
@@ -473,40 +496,35 @@ because without-cache is O(n²) per-step and with-cache is O(n).
 
 ---
 
-### Day 8 — Monday, May 11, 2026
+### Day 8 — Friday, May 8, 2026 ✅ COMPLETED — TRACK A CLOSED
 **Phase 2D: Pruning Results Analysis + Speed Benchmarks**
 
-- [ ] For each pruning configuration that maintains 75%+ quality:
-  - Measure inference speed (tokens per second)
-  - Measure model memory usage
-  - Measure time-to-first-token
-- [ ] Build comparison table:
-  ```
-  | Layers | Config | Quality % | Speed (tok/s) | Memory (MB) | Speedup |
-  |--------|--------|-----------|---------------|-------------|---------|
-  | 16     | Full   | 100%      | X             | Y           | 1.0x    |
-  | 15     | -L15   | ??%       | X             | Y           | ?.?x    |
-  | 14     | -L14,15| ??%       | X             | Y           | ?.?x    |
-  | ...    | ...    | ...       | ...           | ...         | ...     |
-  | 12     | Smart  | 75%       | X             | Y           | ?.?x    |
-  ```
-- [ ] Create visualizations:
-  - Line chart: layers removed vs quality score (with 75% threshold line)
-  - Line chart: layers removed vs inference speed
-  - Bar chart: comparing all pruning strategies at same layer count
-- [ ] Write Track A summary:
-  - Which layers are critical and why?
-  - Which layers are redundant and what were they "supposed" to do?
-  - What's the minimum viable model?
-  - How does this relate to what we learned about layer roles (early=syntax, mid=semantics, late=output)?
-- [ ] Save everything to `outputs/pruning_results/`
-- [ ] Commit: "Day 8: Track A complete — pruning results analyzed and documented"
+> Full task checklist + benchmark results archived in `completeness.md`.
+> Track A summary writeup at `outputs/pruning_results/TRACK_A_SUMMARY.md`.
 
-**Track A deliverable:**
-> "Llama 3.2 1B can be reduced from 16 to N layers while maintaining 75%+ quality.
-> Layers [X, Y, Z] are critical. Removing them causes [specific failures].
-> Layers [A, B, C] are redundant. The model barely uses them.
-> This achieves M% speedup and P% memory reduction."
+- [x] Build `src/pruning/benchmark.py` — measures params, memory, TTFT,
+  generation time, and speedup for 8 representative pruning configs
+- [x] Honest timing via `torch.mps.synchronize()` + warm-up forward
+- [x] Per-layer cost measured: ~116 MB / ~60.8 M params per decoder layer
+- [x] Speed scaling: ~3-4% speedup per layer dropped (linear)
+- [x] Pareto-style scatter (quality × speedup) — empty in the top-right
+  quadrant; no favorable Pareto-frontier trade exists for Llama 3.2 1B
+- [x] **Track A reframed result:** minimum viable layer count under 75%
+  exact match is 16. The 1B model is densely packed. Best 15-layer
+  config (drop L4 alone) sits at 71% / 1.04× speedup.
+- [x] Track A summary written to `TRACK_A_SUMMARY.md` (portfolio-ready)
+- [x] Commit: "Day 8: Track A complete — pruning results analyzed and documented"
+
+**Track A deliverable (reframed):**
+> "Llama 3.2 1B has no removable layers under the 75% top-1 threshold.
+> The 1B model is at the dense edge of layer-pruning tolerance. We
+> characterized the redundancy structure: L0/L1/L4 are load-bearing
+> (input routing + load-bearing mid layer), L12 is the most skippable
+> (3 independent methods agree). Smart pruning beats naive end-removal
+> by avg +9pp but never crosses the threshold. Learnable skip via
+> distillation could not coerce the model to skip any layer.
+> The methodology transfers directly to larger models which are known
+> to have more removable redundancy."
 
 ---
 

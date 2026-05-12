@@ -12,6 +12,117 @@
 
 ---
 
+## Day 8 — Friday, May 8, 2026 ✅ — TRACK A CLOSED
+
+**Phase 2D: Pruning Results Analysis + Speed Benchmarks**
+
+> Run on May 8 immediately after Day 7. ~40 sec of benchmark compute.
+> No new experiments — Day 8 measures speed/memory of the existing
+> configs from Days 6-7 and writes the Track A summary.
+
+### benchmark.py
+- [x] Build `src/pruning/benchmark.py`
+- [x] **Honest MPS timing:** `torch.mps.synchronize()` around every
+  `time.perf_counter()` call. Without sync, MPS reports queue-submit
+  time (~2-5× faster than reality).
+- [x] **Warm-up forward** before timing to flush kernel-compile overhead.
+- [x] **Median of 3 gen runs / 5 TTFT runs** to filter remaining variance.
+- [x] **Memory measured as `sum(p.numel() for p in model.parameters()) × 2 bytes`**
+  — this works after pruning because `model.parameters()` only enumerates
+  the current (post-swap) ModuleList.
+
+### Benchmarked configs (8 total)
+
+| Config | # L | Quality | Params | Memory | TTFT | Tok/s | Speedup |
+|---|---|---|---|---|---|---|---|
+| Full 16 layers (baseline) | 16 | 100.0% | 1,235,814,400 | 2357 MB | 30.7 ms | 29.33 | 1.00× |
+| Drop L4 alone (mid) | 15 | **70.6%** | 1,174,992,896 | 2241 MB | 29.4 ms | 30.42 | 1.04× |
+| Drop L12 alone (smart) | 15 | 64.7% | 1,174,992,896 | 2241 MB | 28.9 ms | 30.06 | 1.03× |
+| Drop L15 alone (end) | 15 | 52.9% | 1,174,992,896 | 2241 MB | 29.3 ms | 30.38 | 1.04× |
+| Drop L12, L7 (smart 14) | 14 | 41.2% | 1,114,171,392 | 2125 MB | 28.1 ms | 31.26 | 1.07× |
+| Drop L14, L15 (end 14) | 14 | 23.5% | 1,114,171,392 | 2125 MB | 28.2 ms | 31.00 | 1.06× |
+| Drop L12, L7, L6 (smart 13) | 13 | 41.2% | 1,053,349,888 | 2009 MB | 26.7 ms | 32.98 | 1.12× |
+| Drop L8-15 (end 8, collapsed) | 8 | 0.0% | 749,242,368 | 1429 MB | 20.2 ms | 41.36 | 1.41× |
+
+**Per-decoder-layer cost:** ~116 MB and ~60.8 M params. Roughly linear
+speedup of ~3-4% per layer dropped.
+
+### Notable findings
+
+1. **Pareto chart is empty in the top-right.** The 75%-quality threshold
+   sits between the baseline (100% quality, 1.00× speedup) and the best
+   sub-16 config (71% quality at drop L4, 1.04× speedup). No config holds
+   both above the threshold AND faster than baseline. This is the visual
+   that closes Track A — the failure to find a Pareto-favorable trade.
+
+2. **Speed scales linearly with layer count.** ~3-4% speedup per
+   dropped layer. Smart vs end vs middle removal all give similar speed
+   numbers at the same layer count (they vary by ≤1 tok/s) — the
+   quality difference comes from *which* layers were dropped, not from
+   any speed-vs-strategy interaction.
+
+3. **TTFT scales with layer count proportionally.** 30.7 ms at 16
+   layers → 20.2 ms at 8 layers. Each layer adds ~1 ms to first-token
+   latency on MPS. For a real interactive use case (chat, completion),
+   this is the more user-facing number than tokens/sec.
+
+4. **Memory savings are large in absolute terms but useless in
+   practice.** Going from 16 → 8 layers saves 928 MB. But the
+   8-layer model produces total garbage (0% exact match, full
+   repetition collapse). The Day 5-7 finding that no sub-16 config
+   holds 75% applies to the speed/memory dimension too: there is no
+   point where the trade is worth it on the 1B model.
+
+5. **The "best 15-layer config" is drop L4 alone, NOT drop L12 (smart).**
+   This is consistent with Day 6 + Day 7 — the layers that Day 5's
+   importance ranking flagged as redundant *are* somewhat removable,
+   but L4 (which Day 5 ranked mid-importance) is unexpectedly the
+   safest single removal. **This validates the lesson recorded in
+   Day 7:** when methods disagree, gradient-based and direct-ablation
+   signals beat manual scoring on the specific disagreement.
+
+### TRACK_A_SUMMARY.md
+
+The portfolio-ready Track A close-out is at
+`outputs/pruning_results/TRACK_A_SUMMARY.md`. It includes:
+- The reframed deliverable (no minimum-N exists)
+- Methodology table (Days 5-8)
+- Critical layers (L0, L1, L4) and most-skippable layer (L12)
+- The full speed/quality/memory table
+- Strategy comparison (end / mid-single / smart / learnable skip)
+- Implications for Track B
+- What transfers to bigger models
+
+### Deliverables checked into the repo
+- `src/pruning/benchmark.py`
+- `outputs/pruning_results/day8_benchmark.csv`
+- `outputs/pruning_results/day8_speed_vs_layers.png` — speed/quality dual axis
+- `outputs/pruning_results/day8_pareto.png` — quality × speedup scatter
+- `outputs/pruning_results/TRACK_A_SUMMARY.md` — portfolio-ready writeup
+- `CLAUDE.md` — Day 8 + Track A marked complete, Current Status updated
+- `monkeypatchknowledge.md` — Day 8 section added (MPS sync gotcha,
+  benchmark patterns for Day 10-12 patch verification, Track A → Track B
+  bridge note)
+
+### Track A — final accounting
+
+**Original goal:** find minimum N layers maintaining 75%+ quality.
+**Result:** N = 16 for Llama 3.2 1B. No sub-16 config crosses the threshold.
+
+**Reframed deliverable (delivered):**
+- Characterized redundancy structure across 16 layers
+- Identified critical layers (L0, L1, L4) with multi-method agreement
+- Identified most-skippable layer (L12) with multi-method agreement
+- Documented non-monotonic layer interactions
+- Quantified speed/memory cost per layer
+- Established the patch verification kit that carries to Track B
+- Built reusable tooling (LayerPruner, evaluate, snapshot/restore,
+  SkippableLayer, benchmark infrastructure)
+
+**Track A closed. Day 9 opens Track B.**
+
+---
+
 ## Day 7 — Friday, May 8, 2026 ✅
 
 **Phase 2C: Smart Pruning + Skip Connections**

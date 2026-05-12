@@ -453,3 +453,95 @@ realistic; the 75% quality / N<16 target for Track A is not.
 - repetition rate as collapse canary (Day 6)
 - selective freeze pattern for any future learnable-component patches (Day 7)
 
+---
+
+## Day 8 (May 8) — Speed/memory benchmarks + Track A close — what the cost of a layer actually is
+
+### What we built
+`src/pruning/benchmark.py` — measures the actual cost (params, memory, TTFT, tokens/sec) of each pruning configuration. Eight representative configs benchmarked spanning the full quality spectrum from 100% down to 0%.
+
+### Implementation patterns relevant to monkey-patching
+
+- **Honest wall-clock timing on MPS requires explicit sync.** MPS dispatches ops async; without `torch.mps.synchronize()` around the timer, `time.perf_counter()` reports queue-submission time, not work-completion time. Numbers will look 2-5× better than reality.
+
+  ```python
+  def sync(device):
+      if device.type == "mps":
+          torch.mps.synchronize()
+      elif device.type == "cuda":
+          torch.cuda.synchronize()
+
+  sync(model.device)
+  t0 = time.perf_counter()
+  out = model.generate(...)
+  sync(model.device)   # ← critical, NOT optional
+  elapsed = time.perf_counter() - t0
+  ```
+
+  **For Day 10-12 patch verification:** if our cache-eviction patch claims "5% compute saved," the honest comparison requires this exact pattern around both pre- and post-patch generation. Don't trust any benchmark missing the synchronize calls.
+
+- **Warm-up forward before timing.** First call into a code path triggers kernel compilation / Metal shader caching. Without a warm-up gen, the first measurement is 2-5× slower than steady state. The pattern:
+  ```python
+  # Warm-up — don't time
+  model.generate(**inputs, max_new_tokens=5, ...)
+  sync(model.device)
+
+  # Now time
+  for _ in range(N_RUNS):
+      sync(model.device); t0 = time.perf_counter()
+      ...
+  ```
+
+- **Median of N runs, not mean.** First runs are still slower than steady-state even after warm-up. Median of 3-5 runs filters this without needing more iterations.
+
+### What we found — the dead Pareto corner
+
+Speed scales **linearly** with layer count: ~3-4% per layer dropped. Memory drops ~116 MB per layer (= 60.8 M FP16 params per decoder layer × 2 bytes).
+
+| Layers | Quality | Speed | Speedup |
+|---|---|---|---|
+| 16 (baseline) | 100% | 29.3 tok/s | 1.00× |
+| 15 (drop L4 — best) | 71% | 30.4 tok/s | 1.04× |
+| 15 (drop L12 — smart) | 65% | 30.1 tok/s | 1.03× |
+| 14 (drop L12, L7) | 41% | 31.3 tok/s | 1.07× |
+| 13 (drop L12, L7, L6) | 41% | 33.0 tok/s | 1.12× |
+| 8 (drop L8-15 — collapse) | 0% | 41.4 tok/s | 1.41× |
+
+**Pareto chart is empty in the top-right corner.** The best 15-layer config gets you 71% quality for a 4% speedup. The threshold (75% quality) is unreachable for any layer count below 16. This is the visual that closes Track A.
+
+### Why this matters for Days 10-12 (Track B)
+
+**The headroom for Track B is fundamentally different.** Pruning whole layers buys 3-4% per layer at huge quality cost. KV cache eviction at the *token* granularity:
+
+- Doesn't touch model weights → quality preservation is structurally easier
+- Compounds with sequence length → savings grow as context grows (whole-layer pruning is constant)
+- Is reversible per-token-position → can be tuned without re-training
+
+**The Track A speed numbers (29.3 tok/s @ full 16 layers, 30.7 ms TTFT) become the baseline that Day 10-12's cache patches must beat.** If a cache patch saves memory but generation slows, the patch failed. The Track B target is: reduce cache memory by ≥25% while keeping tok/s within 2% of baseline AND keeping quality within 90% of baseline.
+
+### Track A close — methodology that transfers to Days 10-12
+
+Track A built and validated these reusable pieces:
+
+| Tool | Day | Reused for |
+|---|---|---|
+| `WeightTweaker.snapshot_layer / restore_layer` | 4-5 | Day 10-12 cache patch revert |
+| `LayerPruner` (ref-only ModuleList swap, layer_idx renumbering) | 6 | Any layer-mutating Day 10-12 experiment |
+| `evaluate()` 4-metric scorecard | 6 | Patch verification |
+| `score_lens_and_cosine`, `score_zero_out` | 5 | Patch verification |
+| `SkippableLayer` wrapper pattern | 7 | Layer-wrapping monkey-patches |
+| `benchmark.py` timing infrastructure | 8 | Day 10-12 speed regression test |
+| Test prompt suite (17 prompts × 5 categories) | 1 | Patch verification |
+| Quality threshold convention (75%) + 4-metric kit | 6 | Pass/fail bar for Day 10-12 patches |
+
+**By Day 9 (Track B opens) we have a full verification stack.** Any cache-eviction patch can be A/B-tested with the same `evaluate()` function we used for Track A. The Day 10-12 deliverables become provable, not anecdotal.
+
+### Closing observations on the 1B model itself
+
+The 1B model is at the lower edge of dense pruning tolerance. Three independent angles converge on this:
+1. **Direct ablation (Day 6):** no single removal preserves 75%
+2. **Smart-ranked ablation (Day 7 Exp 3):** even with Day 5 ranking, no config crosses 75%
+3. **Gradient-based pruning (Day 7 Exp 4):** even with full gradient access, no layer is willing to be skipped
+
+This is not a tooling story — it's a property of Llama 3.2 1B. Larger models (3B, 7B, 70B) are known in the literature to be substantially more prunable. **The methodology transfers; the specific outcome is model-size-specific.** That framing is the Day 14 portfolio claim.
+
