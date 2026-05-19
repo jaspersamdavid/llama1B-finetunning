@@ -12,6 +12,425 @@
 
 ---
 
+## Day 11 — Tuesday, May 19, 2026 ✅
+
+**Phase 3C: Advanced Eviction + Cache Quantization**
+
+> Run on May 19 immediately after Day 10. Compute: ~2 min for baselines +
+> 8 strategy configs (importance × 3 budgets + 2 quantization configs +
+> 2 Day-10 reference re-runs). Per-layer sizing crashed and was deferred.
+
+### advanced_eviction.py
+- [x] Build `src/kv_optimization/advanced_eviction.py`
+- [x] **`ImportanceState`** class — tracks cumulative attention per
+  (layer, position). `update(attentions, kv_len)` adds the latest step's
+  attention; `trim(past_kv, sink, recent_min, budget)` selects keep
+  indices and re-aligns the cumulative array.
+- [x] **`gen_with_importance_eviction`** — manual gen loop with
+  `output_attentions=True` at every step + `ImportanceState` updates.
+- [x] **`quantize_tensor(t, bits)`** — symmetric per-tensor INT8/INT4
+  round-trip simulation. `quantize_cache(past_kv, bits)` applies to all
+  layers between steps.
+- [x] **`gen_with_quantization`** — manual gen loop + `quantize_cache`
+  after every forward.
+- [x] **`gen_with_per_layer` + `trim_cache_per_layer`** — implemented
+  but disabled in main due to the cache-shape crash. Kept in source for
+  Day 12 to use after monkey-patching.
+
+### Strategy 3 — Importance eviction results
+
+| Budget | sink+window (Day 10) | importance (Day 11) | Δ |
+|---|---|---|---|
+| 30 | 92.0% match | **92.9% match** | **+0.9pp** |
+| 20 | 63.5% match | **67.1% match** | **+3.6pp** |
+| 15 | — | 48.0% match | — |
+
+Repetition rate at b=15: 0.531 (approaching the collapse zone).
+
+### Strategy 4 — Per-layer cache sizing → DEFERRED
+
+Crashed with `RuntimeError: The size of tensor a (11) must match the
+size of tensor b (12) at non-singleton dimension 3`. The root cause:
+`LlamaModel.forward()` computes ONE `cache_position` and ONE attention
+mask for the entire stack, assuming uniform cache length across all
+16 layers. Per-layer different shapes break this.
+
+**This is the first technique on the project that genuinely requires
+monkey-patching `LlamaAttention.forward()` (or `LlamaModel.forward()`'s
+mask construction).** Moved to Day 12 plan.
+
+### Strategy 5 — Cache quantization
+
+Symmetric per-tensor round-trip simulation (FP16 → INT → FP16). Memory
+savings are theoretical (we don't actually keep INT form); quality drop
+is real.
+
+| Precision | Match % | Repetition | Theoretical mem savings |
+|---|---|---|---|
+| FP16 (baseline) | 100% | 0.49 | 0% |
+| INT8 | **72.2%** | **0.41** | 50% |
+| INT4 | **16.9%** | **0.58** | 75% |
+
+### All Day 11 strategies on one table
+
+| Strategy | Match % | Prefix | Step0 % | RepRate |
+|---|---|---|---|---|
+| sink+window b=30 (Day 10) | 92.0% | 27.59 | 100.0% | 0.496 |
+| sink+window b=20 (Day 10) | 63.5% | 18.41 | 100.0% | 0.494 |
+| importance b=30 | **92.9%** | 27.88 | 100.0% | 0.488 |
+| importance b=20 | 67.1% | 19.41 | 100.0% | 0.498 |
+| importance b=15 | 48.0% | 13.24 | 100.0% | 0.531 |
+| quantize INT8 | 72.2% | 20.29 | 100.0% | 0.410 |
+| quantize INT4 | 16.9% | 4.12 | 100.0% | 0.576 |
+
+### Notable findings
+
+1. **Importance eviction marginally beats recency-window.** +0.9pp at
+   b=30, +3.6pp at b=20. The benefit is bounded at our short sequence
+   lengths (~40 token max cache, only ~16 middle positions to score).
+   The technique is known from literature (H2O) to scale better on
+   longer sequences (1000+ tokens) where the middle pool is large
+   enough for selection to matter.
+
+2. **Per-layer sizing crashes — first technique requiring monkey-patching.**
+   `LlamaModel.forward` shares one `cache_position` and one attention
+   mask across all 16 layers. Per-layer different cache lengths fail
+   shape-checking inside `eager_attention_forward`. To make this work,
+   we need to monkey-patch `LlamaAttention.forward` (or
+   `LlamaModel.forward`'s mask construction) so each layer slices the
+   mask to its own cache length. **This is finally the motivation for
+   Approach #3 from `monkeypatching.md`.**
+
+3. **INT8 quantization costs 28pp on 30-token gen.** Symmetric per-tensor
+   quantization is too crude for this model. INT4 is catastrophic —
+   repetition rate spikes to 0.58 (same coherence-loss signature as
+   sink-eviction in Day 10).
+
+4. **Repetition rate remains the key collapse canary.** In Day 10 sink-loss
+   it was 0.68; in Day 11 INT4 it's 0.58. Importance b=15 (the most
+   aggressive eviction config that still ran) is at 0.53 — close to
+   the boundary.
+
+5. **Best Day 11 config:** importance b=30 → 92.9% match. Slight
+   improvement over Day 10's best (sink+window b=30 → 92%). Both well
+   above the 75% threshold; both have ~25% cache reduction. The
+   actionable Day-11 finding: **importance eviction is the right choice
+   at moderate budgets; it doesn't unlock dramatic improvements at the
+   1B scale on short sequences.**
+
+### Tooling now available for Day 12
+- `ImportanceState` — reusable live cumulative-attention tracker
+- `quantize_cache(past_kv, bits)` — drop-in between-step quantization
+- `gen_with_per_layer` + `trim_cache_per_layer` — already implemented;
+  Day 12 just needs to add the monkey-patched attention mask handling
+  to make them runnable
+- All four eviction strategies (window-only, sink+window, importance,
+  per-layer) + 3 quantization configs are now in one consistent
+  evaluation harness
+
+### Concept notes added
+- `monkeypatchknowledge.md` — Day 11 section: the per-layer-sizing
+  crash trace, why it requires monkey-patching, the cumulative-tracking
+  realignment pattern, the per-layer-shape consistency check, updated
+  monkey-patch necessity map.
+
+### Deliverables checked into the repo
+- `src/kv_optimization/advanced_eviction.py`
+- `outputs/cache_profiles/day11_advanced_eviction.csv`
+- `outputs/cache_profiles/day11_strategies_compared.png`
+- `outputs/cache_profiles/day11_quant_quality.png`
+- `CLAUDE.md` — Day 11 marked complete, Current Status updated, KV Cache
+  Observations extended with Day 11 findings
+- `monkeypatchknowledge.md` — Day 11 section added
+
+---
+
+## Day 10 — Tuesday, May 19, 2026 ✅
+
+**Phase 3B: Attention Sink Analysis + Basic Eviction**
+
+> Run on May 19 immediately after Day 9. Day 10 compute: ~3 min for sink
+> verification (17 prompts) + ~2:30 for 8 eviction configs × 17 prompts.
+> Total ~5:30.
+
+### token_reducer.py
+- [x] Build `src/kv_optimization/token_reducer.py`
+- [x] **`trim_cache(past_kv, keep_first, keep_last)`** — mutates `past_kv.layers[L].keys/values`
+  in place using `torch.cat([K[..., :keep_first, :], K[..., -keep_last:, :]], dim=-2)`.
+  No-op if cache is already within budget.
+- [x] **`gen_with_eviction(model, tokenizer, prompt, budget, sink_size, max_new_tokens)`** —
+  manual generation loop that calls `trim_cache` after every step. Identical structure
+  to Day 9 profiler's loop, but with the trim hook.
+- [x] **`gen_no_evict`** — baseline (no trimming).
+- [x] **`compare_to_baseline(test, baseline)`** — match_pct, prefix_match, first_top1_kept,
+  repetition_rate.
+
+### Exp A — Sink verification across 17 prompts
+- [x] Re-use Day 9's `profile_prompt()` for each of the 17 prompts (50 generated tokens
+  each for speed).
+- [x] Extract position-0 attention share per layer.
+- [x] Aggregate: per-layer mean ± std across 17 prompts.
+
+**Result:**
+
+| Layer | BOS share (mean ± std) | min | max |
+|---|---|---|---|
+| L0 | 49.4 ± 2.7 | 44.4 | 53.9 |
+| L1 | 76.2 ± 1.6 | 73.6 | 79.0 |
+| L2 | **80.5 ± 2.8** | 74.0 | 84.3 |
+| L3 | 73.5 ± 2.4 | 70.1 | 78.5 |
+| L4 | 65.8 ± 2.4 | 62.2 | 69.6 |
+| L5 | 59.8 ± 4.0 | 52.3 | 66.7 |
+| L6 | 53.3 ± 4.2 | 46.2 | 60.2 |
+| L7 | 53.1 ± 3.2 | 48.2 | 58.2 |
+| L8 | 49.1 ± 4.2 | 41.1 | 59.2 |
+| L9 | 48.2 ± 3.9 | 42.0 | 57.9 |
+| L10 | 60.4 ± 6.1 | 50.8 | 76.0 |
+| L11 | 68.9 ± 3.2 | 64.2 | 76.2 |
+| L12 | 69.4 ± 4.3 | 62.8 | 77.9 |
+| L13 | 75.5 ± 3.6 | 69.2 | 81.8 |
+| L14 | 70.8 ± 3.2 | 65.8 | 76.8 |
+| L15 | 66.0 ± 2.5 | 60.7 | 69.8 |
+
+**Overall: 63.7% of attention goes to BOS on average per layer.** Standard deviation
+across prompts is tight (2-6% per layer). The sink is structural — not prompt-specific.
+
+### Exp B — Eviction strategies (4 budgets × 2 strategies = 8 configs)
+- [x] **Baselines** computed: greedy 30-token generation per prompt with no eviction.
+- [x] For each (strategy, budget), generate 30 tokens with eviction enabled for all 17
+  prompts. Compare against baseline.
+
+**Result:**
+
+| Strategy | Sink | Budget | Match% | Prefix | Step0Ok% | RepRate |
+|---|---|---|---|---|---|---|
+| window-only | 0 | 100 | 100.0% | 30.00 | 100.0% | 0.492 |
+| window-only | 0 | 30 | 86.1% | 25.53 | 100.0% | 0.525 |
+| window-only | 0 | 20 | 50.2% | 14.41 | 100.0% | 0.620 |
+| window-only | 0 | 10 | 21.8% | 4.59 | 100.0% | 0.678 |
+| sink+window | 4 | 100 | 100.0% | 30.00 | 100.0% | 0.492 |
+| **sink+window** | **4** | **30** | **92.0%** | 27.59 | 100.0% | **0.496** |
+| sink+window | 4 | 20 | 63.5% | 18.41 | 100.0% | 0.494 |
+| sink+window | 4 | 10 | 24.1% | 6.18 | 100.0% | 0.502 |
+
+### Notable findings
+
+1. **Attention sink is structural and universal.** 17 prompts × 16 layers all show
+   strong sinks at position 0. Standard deviation is small (2-6% per layer). This is
+   not a "Paris is a special token" effect — it's how the model routes attention.
+
+2. **Sink preservation matters at every budget.** Sink+window beats window-only by
+   +5.9pp at budget=30, +13.3pp at budget=20. The gap is largest in the mid-budget
+   range where some eviction is happening but recent context is mostly preserved.
+
+3. **Sink preservation prevents repetition collapse.** Repetition rate stays at
+   ~0.49-0.50 across all sink+window budgets. Without sink, it climbs from 0.49
+   (no evict) → 0.68 (b=10). **Losing the sink doesn't just degrade quality — it
+   collapses the model into loops.** The sink is the model's coherence anchor.
+
+4. **The Day 6 top-1 metric is blind to eviction.** Step0Ok% is 100% for every config.
+   This is because the first generated token happens before eviction kicks in (cache
+   size = prompt_len, which is below all budgets tested). Day 10 introduces a new
+   metric: 30-token greedy match against no-evict baseline.
+
+5. **Quality cliff is between budget=30 and budget=20.** Sink+window: 92% at b=30,
+   64% at b=20, 24% at b=10. The "recent window" is doing real work beyond the first
+   ~20 positions. For Day 11+, smarter eviction within the middle (importance-based)
+   may push this cliff lower.
+
+6. **Eviction works without monkey-patching.** Between-step `trim_cache` on
+   `past_kv.layers[L].keys/values` works directly with transformers 5.x DynamicCache.
+   No need to subclass `LlamaAttention` for windowing or sink-window strategies.
+   This is equivalent to StreamingLLM's positional shift — kept tokens get re-indexed
+   to consecutive positions from the model's POV; attention sinks absorb the math
+   weirdness.
+
+### Tooling now available for Day 11+
+- `trim_cache(past_kv, keep_first, keep_last)` — between-step cache mutation primitive.
+  Works directly on DynamicCache; no monkey-patching.
+- `gen_with_eviction()` — manual generation loop with eviction hook. Day 11's
+  importance-based and per-layer strategies can build on top.
+- `compare_to_baseline()` — match% / prefix / repetition / first-token kept.
+  The patch-verification metric for any eviction strategy.
+
+### Concept notes added
+- `monkeypatchknowledge.md` — Day 10 section: between-step cache mutation pattern,
+  why it works without re-RoPE, the new map of which strategies need monkey-patching
+  vs which don't. Most of Days 11-12 can stay in the "no monkey-patching" column.
+
+### Deliverables checked into the repo
+- `src/kv_optimization/token_reducer.py`
+- `outputs/cache_profiles/day10_sink_verification.png` — per-layer BOS share with min/max
+- `outputs/cache_profiles/day10_eviction_quality.png` — match% vs budget for both strategies
+- `outputs/cache_profiles/day10_eviction_results.csv` — full 8-config table
+- `outputs/cache_profiles/day10_per_prompt_sink.csv` — per-prompt-per-layer BOS share
+- `CLAUDE.md` — Day 10 marked complete, Current Status updated, KV Cache Observations
+  table extended with Day 10 findings
+- `monkeypatchknowledge.md` — Day 10 section added
+
+---
+
+## Day 9 — Tuesday, May 19, 2026 ✅ — TRACK B OPENED
+
+**Phase 3A: KV Cache Profiling**
+
+> Originally scheduled for Tuesday May 12 in the v3 plan. Delay due to
+> off-days; picked back up May 19 with full schedule slide pending.
+> Day 9 compute: ~67 sec on Mac Mini M4 MPS for 17 prompts × 100
+> generated tokens with `output_attentions=True` at every step.
+
+### cache_profiler.py
+- [x] Build `src/kv_optimization/cache_profiler.py`
+- [x] **Manual generation loop** (not `model.generate()`) so we can read
+  per-step `attentions` cleanly. Each forward returns
+  `attentions[L].shape = [1, num_heads, 1, kv_len]` during generation.
+- [x] **`output_attentions=True` + `use_cache=True`** combined to extract
+  attention weights without disabling cache plumbing.
+- [x] **Detach + numpy immediately** after each forward: `attn.sum(dim=(0,1,2)).cpu().numpy()`.
+  Prevents GPU memory growth across the 100 steps.
+- [x] Accumulate per-layer × per-position "attention received" array of
+  shape `[num_layers, prompt_len + max_new_tokens]`.
+- [x] Build heatmap `[gen_step, cached_pos]` for the canonical prompt
+  (`"The first president of the United States was"`), averaging across
+  layers.
+- [x] **Dead-token metric:** for each layer, % of cached positions whose
+  cumulative attention is below 1% of the layer's total attention budget.
+
+### Key results
+
+**Headline:** 94.6% of cached tokens are "dead" across 17 prompts × 100
+generated tokens (mean; std = 1.1%, range 92.3-96.7%).
+
+**Per-layer dead rate (avg across 17 prompts):**
+
+| Layer | Dead % | Note |
+|---|---|---|
+| L1 | 98.9 | most-dead — top eviction candidate |
+| L2 | 98.8 | most-dead — top eviction candidate |
+| L3 | 98.4 | most-dead |
+| L13 | 97.9 | high dead rate |
+| L4 | 97.3 | high dead rate |
+| L0 | 93.1 | sink concentration here |
+| L15 | 97.0 | mid |
+| L14 | 96.0 | mid |
+| L11 | 96.6 | mid |
+| L12 | 96.6 | mid |
+| L10 | 93.8 | mid |
+| L5 | 94.0 | mid |
+| L6 | 91.5 | densest mid layer |
+| L9 | 88.1 | **least-dead (densest cache)** |
+| L7 | 87.8 | **least-dead (densest cache)** |
+| L8 | 87.3 | **least-dead (densest cache)** |
+
+**Attention sink check (canonical prompt, position 0 share):**
+
+| Layer | BOS share |
+|---|---|
+| L2 | 81.4% — strongest sink |
+| L1 | 74.5% |
+| L13 | 73.8% |
+| L3 | 71.4% |
+| L11 | 67.2% |
+| L14 | 67.1% |
+| L4 | 66.8% |
+| L12 | 66.6% |
+| L15 | 63.8% |
+| L5 | 56.5% |
+| L10 | 55.3% |
+| L6 | 53.4% |
+| L7 | 52.2% |
+| L8 | 48.7% |
+| L9 | 43.6% |
+| L0 | 43.1% — weakest sink (still 43%!) |
+
+**Every layer has a strong attention sink at position 0.** Even the
+weakest sink (L0) sends 43% of attention there. Position 0 must be
+preserved by any eviction strategy.
+
+**Memory breakdown:**
+
+| seq_len | weights MB | KV MB | cache % of total |
+|---|---|---|---|
+| 50 | 2357 | 1.6 | 0.07% |
+| 100 | 2357 | 3.1 | 0.13% |
+| 200 | 2357 | 6.2 | 0.26% |
+| 500 | 2357 | 15.6 | 0.66% |
+| 1000 | 2357 | 31.2 | 1.31% |
+| 2000 | 2357 | 62.5 | 2.58% |
+| 4000 | 2357 | 125.0 | 5.04% |
+
+At the 1B scale, the cache is a tiny fraction of total memory. Track B's
+benefit on this model is primarily **compute reduction** per generation
+step (attention matmul scales with `kv_len`), not memory savings.
+
+### Notable findings
+
+1. **94.6% dead rate is the headline.** Cache eviction can be very
+   aggressive without losing much actual attention work. This is
+   the inverse of Track A's situation — Track A had zero pruning
+   headroom; Track B has enormous eviction headroom.
+
+2. **Attention sinks confirmed across all 16 layers.** The StreamingLLM
+   finding applies to Llama 3.2 1B at full strength. Position 0
+   receives 43-81% of attention per layer. **Any eviction strategy
+   that doesn't preserve position 0 will break the model.**
+
+3. **Cross-validation with Track A:** the layers with the **densest**
+   caches (L7, L8, L9 — only 87% dead rate) are also the **hardest
+   to remove** in Track A (Day 6 single-layer ablation: L7=53%,
+   L8=65%, L9=59% exact match — all in the lower tier). Two
+   independent methodologies agree these layers are doing real work.
+
+4. **Per-layer eviction-headroom signal for Day 11:**
+   - Most-dead (most eviction headroom): L1, L2, L3 (~98-99%)
+   - Least-dead (keep more cache): L7, L8, L9 (~87-88%)
+   - Day 11's per-layer sizing should use this ordering directly.
+
+5. **Memory-vs-compute framing.** At ~100 tokens, KV cache is 0.1% of
+   total memory — Track B's value is **compute savings per generation
+   step**, not memory. Each evicted cached token saves one row of
+   attention matmul per generation step. At 4000 tokens with 95%
+   eviction, that's a 20× reduction in attention compute per step.
+   The methodology transfers to bigger models where memory savings
+   become large in absolute terms too.
+
+### Tooling now available for Day 10+
+- `profile_prompt(model, tokenizer, prompt, max_new_tokens=100)` —
+  returns per-layer attention received array. **This is the patch
+  verification A/B test** — run baseline once, run patch, diff the
+  arrays.
+- `dead_token_stats()` — computes per-layer % of cached tokens
+  receiving below threshold attention. Day 11's per-layer sizing
+  consumes this directly.
+- Manual generation loop template — Day 10's eviction patches can
+  apply between-step modifications by slotting in here.
+- `outputs/cache_profiles/day9_canonical_attention.npz` — saved arrays
+  for Day 10 to consume without re-running the profiler.
+- `outputs/cache_profiles/day9_per_layer_attention.csv` — per-layer
+  avg dead-rate for Day 11's sizing decisions.
+
+### Concept notes added
+- `monkeypatchknowledge.md` — Day 9 section: cache profiling as the
+  patch verification framework, the manual generation loop template
+  for between-step modifications, the sink budget check + cache
+  attention preservation check as the new pieces of the verification
+  kit, Day 10-12 strategy priors derived from Day 9 data.
+
+### Deliverables checked into the repo
+- `src/kv_optimization/cache_profiler.py`
+- `outputs/cache_profiles/day9_cache_memory_curve.png`
+- `outputs/cache_profiles/day9_attention_heatmap.png`
+- `outputs/cache_profiles/day9_per_layer_dead_pct.png`
+- `outputs/cache_profiles/day9_memory_breakdown.png`
+- `outputs/cache_profiles/day9_dead_token_stats.csv`
+- `outputs/cache_profiles/day9_per_layer_attention.csv`
+- `outputs/cache_profiles/day9_canonical_attention.npz`
+- `CLAUDE.md` — Day 9 marked complete, Current Status updated, KV
+  Cache Observations table filled
+- `monkeypatchknowledge.md` — Day 9 section added
+
+---
+
 ## Day 8 — Friday, May 8, 2026 ✅ — TRACK A CLOSED
 
 **Phase 2D: Pruning Results Analysis + Speed Benchmarks**

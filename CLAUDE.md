@@ -25,8 +25,73 @@
 
 ## Current Status
 
-> **Last updated:** May 8, 2026 (end of Day 8 — **Track A complete**)
-> **Currently working on:** Day 8 complete ✅. **Track A wrapped.** Next session: Day 9 — KV Cache Profiling (Track B — Phase 3A, begins Track B).
+> **Last updated:** May 19, 2026 (end of Day 11)
+> **Currently working on:** Day 11 complete ✅. Next session: Day 12 — Combined Optimization + Track B Results (Phase 3D, closes Track B).
+>
+> **Day 11 highlights (full archive in `completeness.md`):**
+> - **`src/kv_optimization/advanced_eviction.py`** built — importance
+>   eviction (cumulative-attention scored), quantization (INT8/INT4
+>   round-trip simulation). Per-layer sizing **DEFERRED** to Day 12.
+> - **Importance eviction marginally beats recency-window:**
+>   b=30 → 92.9% vs sink+window's 92.0% (+0.9pp); b=20 → 67.1% vs 63.5%
+>   (+3.6pp). The benefit is bounded at our short sequence lengths
+>   because "middle" only has ~16 positions to choose from. Expected
+>   to widen on longer sequences.
+> - **INT8 cache quantization costs 28pp.** FP16 → INT8 round-trip:
+>   72.2% match. INT4 → 16.9% match (catastrophic). Quantization is
+>   not free at the 1B scale.
+> - **Per-layer cache sizing CRASHES with between-step trim** —
+>   transformers shares `cache_position` across all 16 layers, so the
+>   attention mask is built for one cache length. Per-layer different
+>   shapes fail with `RuntimeError: size mismatch in attn_weights +
+>   attention_mask`. **First technique we've hit that genuinely needs
+>   monkey-patching `LlamaAttention.forward()`** — that's Day 12's
+>   work.
+> - **Repetition rate is the canary again:** INT8 keeps rep low (0.41);
+>   INT4 spikes to 0.58. Same pattern as Day 10 sink-loss — when the
+>   model loses too much information, it loops.
+>
+> **Day 10 highlights (full archive in `completeness.md`):**
+> - **`src/kv_optimization/token_reducer.py`** built — `trim_cache()`
+>   mutates `past_kv.layers[L].keys/values` between generation steps to
+>   implement window-only and sink+window eviction. No monkey-patching
+>   yet — just between-step cache trimming.
+> - **Attention sink confirmed universal:** across all 17 prompts ×
+>   16 layers, position 0 receives 49-80% of attention. Average 63.7%.
+>   Sink is structural, not prompt-specific (std 2-6% per layer).
+> - **Sink+window beats window-only at every cache budget.** At budget=30:
+>   92% vs 86% match. At budget=20: 64% vs 50%. Sink preservation also
+>   keeps repetition rate stable (0.49-0.50) while window-only repetition
+>   climbs (0.49 → 0.68) as cache shrinks.
+> - **Quality cliff between budget=30 and budget=20.** With sink+window,
+>   budget=30 holds 92% match (cache reduced ~25%). Budget=20 drops to
+>   64%. Optimal budget for our 17-prompt × 30-gen suite is ~30.
+> - **The Day 6 top-1 metric misses eviction issues** — first-token quality
+>   is always 100% because eviction kicks in later. Need multi-token
+>   match to surface eviction degradation. Day 10 uses 30-token greedy
+>   match against no-evict baseline.
+>
+> **Day 9 highlights (full archive in `completeness.md`):**
+> - **`src/kv_optimization/cache_profiler.py`** built — manual generation
+>   loop with `output_attentions=True` at each step, accumulates per-cached-
+>   position attention received across all queries.
+> - **HEADLINE: 94.6% of cached tokens are "dead"** (receive <1% of their
+>   layer's attention budget). Stable across all 17 prompts (std 1.1%).
+>   That's *massive* eviction headroom vs Track A's pruning ceiling.
+> - **Attention sinks confirmed everywhere.** BOS (position 0) receives
+>   **43-81% of total attention** per layer. L2 has 81% concentrated at
+>   position 0. Cannot evict position 0 without breaking the model.
+> - **Per-layer dead-rate ordering (eviction headroom):** L1, L2, L3 have
+>   ~99% dead → safe for aggressive eviction. L7, L8, L9 have ~87% dead
+>   (lowest = densest cache, but still 87%!).
+> - **Memory framing:** at our sequence lengths (~100 tokens), KV cache is
+>   only 0.1% of total. At 4000 tokens it's 5%. **Cache reduction's value
+>   at the 1B scale is compute-savings, not memory-savings.** Each
+>   eviction also reduces attention compute per generation step.
+> - **Day 5/6/7/8 layer rankings cross-validated by Day 9 cache density:**
+>   L7-L9 (low dead rate = dense cache) overlap with Day 6's worst single-
+>   removal layers (L7=53%, L8=65%, L11=41% exact match). The "load-bearing"
+>   layers from Track A are also the ones with the densest cache here.
 >
 > **Day 8 highlights (full archive in `completeness.md`):**
 > - **`src/pruning/benchmark.py`** built — measures params, memory, TTFT,
@@ -117,26 +182,25 @@
 >   noise-fragility table.
 > - `monkeypatching.md` parked for Days 10-12.
 >
-> **Next session — Day 9 (next working day, opens Track B):**
-> 1. Build `src/kv_optimization/cache_profiler.py`
-> 2. For each test prompt: generate 100 tokens, record per-step total cache
->    memory, per-layer cache memory, per-cached-token total attention received
-> 3. Identify "dead" cached tokens (receive <1% of total attention)
-> 4. Plot attention heatmap (cached position × generation step)
-> 5. Memory breakdown stacked chart (weights vs activations vs cache) at
->    various seq lengths
-> 6. Commit: `"Day 9: KV cache profiled — baseline measurements established"`
+> **Next session — Day 12 (closes Track B):**
+> 1. **Per-layer sizing via monkey-patching** — the deferred Strategy 4
+>    from Day 11. Monkey-patch `LlamaAttention.forward()` to use
+>    per-layer attention masks. First time we actually need monkey-patching.
+> 2. **Combined strategy**: importance b=20 + INT8 quant — measure combined
+>    quality and the speed/memory trade
+> 3. Compile the Track B comparison table
+> 4. Write `TRACK_B_SUMMARY.md` (matches Track A's portfolio writeup pattern)
+> 5. Commit: `"Day 12: Track B complete — cache optimization results documented"`
 >
-> **Carry-in priors from Track A (Days 5-8):**
-> - L0, L1, L4 are load-bearing — give them gentler cache budgets in Day 11
-> - L12 is the most patch-friendly layer across 3 methods — start aggressive
->   eviction here
-> - Patch verification kit: exact-match (Day 6) + per-layer cosine-sim
->   (Day 5) + KL Δ (Day 5) + repetition rate as collapse canary (Day 6)
-> - Don't trust top-1 alone; don't trust avg prob delta alone — both miss
->   different failure modes
-> - Layer interactions are non-additive — combined patches need fresh
->   end-to-end validation, not just composition of validated parts
+> **Carry-in priors from Day 11:**
+> - Best Day 11 config: importance b=30 → 92.9% match (marginally better
+>   than Day 10's sink+window 92.0%)
+> - Importance-vs-recency win widens at tighter budgets and (presumably)
+>   on longer sequences
+> - INT8 alone costs ~28pp; INT4 catastrophic. Combined eviction+INT8
+>   could be even worse — needs testing
+> - Per-layer sizing is the most interesting unfinished work; needs
+>   monkey-patching
 
 ---
 
@@ -528,91 +592,82 @@ because without-cache is O(n²) per-step and with-cache is O(n).
 
 ---
 
-### Day 9 — Tuesday, May 12, 2026
+### Day 9 — Tuesday, May 19, 2026 ✅ COMPLETED — Track B opened
 **Phase 3A: KV Cache Profiling**
 
-- [ ] Build `cache_profiler.py`:
-  - For each test prompt, generate 100 tokens
-  - At each generation step, record:
-    - Total KV cache memory (bytes)
-    - Per-layer cache memory
-    - For each cached token: how much total attention does it receive from ALL generated tokens?
-  - Identify "dead" cached tokens — tokens that receive < 1% of total attention
-  - Calculate: what % of the cache is "dead weight"?
-- [ ] **Experiment: Token importance over time**
-  - Generate 100 tokens for "Explain why the sky is blue in detail."
-  - At step 10, 25, 50, 75, 100: which cached tokens get the most attention?
-  - Plot: heatmap — X axis = cached token position, Y axis = generation step, color = attention received
-  - **Expected finding:** First token (BOS) and recent tokens get most attention. Middle tokens get ignored.
-- [ ] **Experiment: Cache memory breakdown**
-  - What % of total inference memory is the KV cache vs model weights vs activations?
-  - How does this ratio change as sequence length grows (50, 100, 200, 500 tokens)?
-  - Plot: stacked bar chart showing memory breakdown at different sequence lengths
-- [ ] Document all baseline measurements — these are the numbers we're trying to beat
-- [ ] Save to `outputs/cache_profiles/`
-- [ ] Commit: "Day 9: KV cache profiled — baseline measurements established"
+> Full task checklist + experiment results archived in `completeness.md`.
+> Summary below is what future-Claude needs to know about the project state
+> after Day 9.
 
-**Understanding goal for Day 9:**
-> By end of day, you should know: exactly how much memory the KV cache uses, which tokens
-> in the cache are actually important, and what % of the cache is wasted on tokens nobody
-> attends to. This gives you the target for optimization.
+- [x] Build `src/kv_optimization/cache_profiler.py` — manual generation
+  loop with `output_attentions=True`, accumulates per-cached-position
+  attention received across all queries
+- [x] 17 prompts × 100 tokens generated, ~67 sec total compute on MPS
+- [x] **Dead-token rate** (cached tokens receiving <1% of layer's attention):
+  **94.6% mean across prompts** (std 1.1%, range 92.3-96.7%)
+- [x] **Attention sink confirmed** — BOS position receives 43-81% of all
+  attention per layer. L2 most concentrated (81.4% on position 0).
+- [x] **Per-layer dead rate ordered** — L1 (98.9%), L2 (98.8%), L3 (98.4%)
+  have nearly-empty caches. L7 (87.8%), L8 (87.3%), L9 (88.1%) have
+  the densest caches — but still ≥87% dead.
+- [x] Memory breakdown at 50/100/200/500/1000/2000/4000 token seq lengths
+  — at 4000 tokens, KV cache is 5% of total memory (model weights dominate)
+- [x] Saved canonical attention array to `outputs/cache_profiles/day9_canonical_attention.npz`
+  for Day 10 to consume without re-running the profiler
+- [x] Commit: "Day 9: KV cache profiled — baseline measurements established"
 
 ---
 
-### Day 10 — Wednesday, May 13, 2026
+### Day 10 — Tuesday, May 19, 2026 ✅ COMPLETED
 **Phase 3B: Attention Sink Analysis + Basic Eviction**
 
-- [ ] **Learn: Attention Sinks**
-  - Research paper: "Efficient Streaming Language Models with Attention Sinks" (StreamingLLM)
-  - Key insight: LLMs dump attention on the first token (BOS) as a "sink" — it's not because
-    the first token is important, it's because attention scores must sum to 1 and the model
-    needs somewhere to put "unused" attention
-  - This means: the first few tokens MUST stay in cache even though they seem unimportant
-- [ ] **Experiment: Verify attention sinks in Llama 3.2 1B**
-  - Generate 100 tokens, at each step record attention to token 0 (BOS)
-  - Does BOS consistently receive high attention across all layers?
-  - Which layers show the strongest sink effect?
-  - Plot: line chart — attention to BOS per layer
-- [ ] Build `token_reducer.py` with Strategy 1 — Window-only cache:
-  - Only keep the last N tokens in cache
-  - Try window sizes: 100%, 75%, 50%, 25% of sequence length
-  - For each window size: run all test prompts, generate 50 tokens, measure quality
-  - Record: quality score vs cache size reduction
-- [ ] Build Strategy 2 — Sink + Window:
-  - Always keep first 4 tokens (attention sinks) + last N tokens
-  - Evict everything in between
-  - Try window sizes: 75%, 50%, 25%
-  - Compare with window-only — does keeping sinks improve quality?
-- [ ] Document: which strategy works better and by how much?
-- [ ] **Concept note:** Write the "Attention Sinks" entry in `LLMXray.md`
-- [ ] Commit: "Day 10: Attention sinks verified, basic eviction strategies tested"
+> Full task checklist + experiment results archived in `completeness.md`.
+> Summary below is what future-Claude needs to know about the project state
+> after Day 10.
+
+- [x] **Attention Sink concept** — confirmed structural; BOS receives 49-80%
+  of attention per layer across all 17 prompts (std 2-6%). Must preserve
+  position 0 in any eviction strategy.
+- [x] Build `src/kv_optimization/token_reducer.py` with `trim_cache()` —
+  mutates `past_kv.layers[L].keys/values` between generation steps. No
+  monkey-patching of attention class yet — between-step trimming works
+  because DynamicCache stores K/V as plain tensors we can re-slice.
+- [x] **Strategy 1 (window-only)** at budgets 100/30/20/10 → 100/86/50/22%
+  match. Repetition rate climbs from 0.49 → 0.68 as cache shrinks.
+- [x] **Strategy 2 (sink + window, sink=4)** at same budgets → 100/92/64/24%
+  match. Repetition rate stays at 0.49-0.50 — sink preserves coherence.
+- [x] **Sink+window beats window-only at every budget.** Sink-preservation
+  is worth ≈ +6pp match at budget=30, +13pp at budget=20.
+- [x] **Day 6 top-1 metric is blind to eviction** — first-token quality
+  always 100% because eviction kicks in after first gen step. Day 10
+  uses 30-token greedy match against no-evict baseline as the proper metric.
+- [x] Commit: "Day 10: Attention sinks verified, basic eviction strategies tested"
 
 ---
 
-### Day 11 — Thursday, May 14, 2026
+### Day 11 — Tuesday, May 19, 2026 ✅ COMPLETED
 **Phase 3C: Advanced Eviction + Cache Quantization**
 
-- [ ] Build Strategy 3 — Importance-based eviction:
-  - Track cumulative attention each cached token receives
-  - Every N steps, evict the cached tokens with the lowest cumulative attention
-  - Keep a minimum of sink tokens + recent window
-  - Test: does this outperform static window eviction?
-- [ ] Build Strategy 4 — Per-layer cache sizing:
-  - Not all layers need full cache
-  - Based on Day 9 profiling: which layers use their cache most/least?
-  - Try: full cache for important layers, half cache for less important, quarter cache for least
-  - Measure quality vs cache reduction
-- [ ] **Learn: Quantization**
-  - Full precision: each number stored as 16-bit float (FP16) = 2 bytes
-  - INT8 quantization: compress to 8-bit integer = 1 byte (50% memory savings)
-  - INT4 quantization: compress to 4-bit = 0.5 bytes (75% memory savings)
-  - Tradeoff: smaller = less accurate representation of the number
-- [ ] Build KV cache quantization:
-  - Quantize cached K and V vectors from FP16 → INT8
-  - Measure: memory savings vs quality drop
-  - Try FP16 → INT4 as well — how much quality is lost?
-- [ ] **Concept note:** Write the "Quantization" entry in `LLMXray.md`
-- [ ] Commit: "Day 11: Advanced eviction + cache quantization implemented"
+> Full task checklist + experiment results archived in `completeness.md`.
+> Summary below is what future-Claude needs to know about the project state
+> after Day 11.
+
+- [x] **Strategy 3 — Importance eviction:** `ImportanceState` class tracks
+  cumulative attention received per cached position across all queries.
+  When cache > budget, keep sink[:4] + top-importance middle + recent[:5].
+  At b=30: 92.9% match (vs sink+window 92.0%, +0.9pp). At b=20: 67.1%
+  (vs 63.5%, +3.6pp). Benefit grows at tighter budgets.
+- [x] **Strategy 4 — Per-layer sizing — DEFERRED.** Crashes on
+  between-step trim because transformers shares `cache_position` across
+  all 16 layers; per-layer different cache lengths cause
+  attention-mask shape mismatch. **First technique that genuinely
+  requires monkey-patching `LlamaAttention.forward()`** — moved to Day 12.
+- [x] **Strategy 5 — KV cache quantization:** symmetric per-tensor
+  round-trip simulation (FP16 → INT → FP16). INT8: 72.2% match
+  (significant cost). INT4: 16.9% match (catastrophic). Repetition rate
+  spikes at INT4 (0.58 vs baseline 0.49) — same coherence-loss pattern as
+  Day 10 sink-loss.
+- [x] Commit: "Day 11: Advanced eviction + cache quantization implemented"
 
 ---
 
@@ -780,7 +835,18 @@ because without-cache is O(n²) per-step and with-cache is O(n).
 ### KV Cache Observations
 | Finding | Impact | Date |
 |---------|--------|------|
-| — | *Not yet started* | — |
+| 94.6% of cached tokens are "dead" (<1% attention received) across 17 prompts × 100 generated tokens | Massive eviction headroom vs Track A's pruning ceiling | May 19, 2026 |
+| BOS token receives 43-81% of attention per layer (sink); L2 most concentrated at 81% | Cannot evict position 0. Day 10 strategy must always preserve sink. | May 19, 2026 |
+| Per-layer dead rate: L1=98.9%, L2=98.8%, L3=98.4% (highest) vs L7=87.8%, L8=87.3%, L9=88.1% (lowest) | Per-layer cache sizing (Day 11): tiny window for L1-L3, bigger window for L7-L9 | May 19, 2026 |
+| Cross-validation with Track A: L7-L9 (densest cache) overlap with Day 6's worst single-removal layers (L7=53%, L8=65%) | "Load-bearing" layers from Track A are also the dense-cache ones in Track B — consistent signal | May 19, 2026 |
+| Memory framing: KV cache is 0.1% of total memory at 100 tokens; 5% at 4000 tokens | At 1B scale, Track B's value is compute-savings per gen step, not memory-savings | May 19, 2026 |
+| Attention sink universal — BOS gets 49-80% per layer across all 17 prompts (std 2-6%) | Structural finding, not prompt-specific. Sink preservation is mandatory for eviction. | May 19, 2026 |
+| Sink+window @ budget=30 holds 92% match; window-only @ same budget holds 86% | Sink preservation worth ≈ +6pp at budget=30, +13pp at budget=20 | May 19, 2026 |
+| Repetition rate stays at 0.49 with sink-preserved eviction; climbs to 0.68 without sink | Sink is a coherence anchor — losing it sends model into token loops | May 19, 2026 |
+| Quality cliff at budget=20 — drops from 92% (b=30) → 64% (b=20) → 24% (b=10) | "Recent window" is doing real work beyond the first ~20 positions; sub-20 budgets break things | May 19, 2026 |
+| Importance eviction (cumulative-attention scored) marginally beats recency-window: +0.9pp at b=30, +3.6pp at b=20 | Smarter middle-token selection has bounded win on 40-token caches; expected to widen on longer sequences | May 19, 2026 |
+| Per-layer cache sizing CRASHES with between-step trim due to shared cache_position across all 16 layers | First technique that genuinely needs monkey-patching `LlamaAttention.forward()` — Day 12 work | May 19, 2026 |
+| INT8 cache quantization costs 28pp on 30-token gen (72% match). INT4 catastrophic (17%) | Quantization is not free at the 1B scale; INT4 hits the coherence collapse threshold | May 19, 2026 |
 
 ### Weight Tweaking Observations
 | Tweak | Effect | Date |

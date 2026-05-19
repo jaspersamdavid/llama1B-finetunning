@@ -545,3 +545,311 @@ The 1B model is at the lower edge of dense pruning tolerance. Three independent 
 
 This is not a tooling story — it's a property of Llama 3.2 1B. Larger models (3B, 7B, 70B) are known in the literature to be substantially more prunable. **The methodology transfers; the specific outcome is model-size-specific.** That framing is the Day 14 portfolio claim.
 
+---
+
+## Day 9 (May 19) — KV Cache Profile → confirmed huge eviction headroom + strong sinks
+
+### What we built
+`src/kv_optimization/cache_profiler.py` — manual generation loop with `output_attentions=True` at each step, accumulating per-cached-position attention received across all queries.
+
+### Implementation patterns relevant to monkey-patching
+
+- **`output_attentions=True` + `use_cache=True` is the data source.** Each forward pass during generation returns attentions of shape `[1, num_heads, 1, kv_len]` per layer. **This is exactly the slice we need for Day 10-12 patches.** Day 9's profiler doubles as the Day 10-12 verification A/B framework.
+
+- **Manual generation loop (not `model.generate()`) is required.** `model.generate()` doesn't surface per-step attentions cleanly. Pattern:
+  ```python
+  out = model(**inputs, output_attentions=True, use_cache=True)   # prompt forward
+  past_kv = out.past_key_values
+  for step in range(max_new_tokens):
+      out = model(input_ids=next_token, past_key_values=past_kv,
+                  output_attentions=True, use_cache=True)
+      # attentions[L]: [1, H, 1, kv_len]
+      past_kv = out.past_key_values
+      next_token = out.logits[0, -1].argmax().view(1, 1)
+  ```
+  The manual loop gives Day 10-12 a hook point to apply eviction *between* steps.
+
+- **Detach + numpy immediately.** Each forward produces ~860K floats of attentions across 16 layers. Across 100 steps × 17 prompts that's GBs if held. We extract `attn.sum(dim=(0, 1, 2)).cpu().numpy()` immediately and let the GPU tensor GC. **Day 10-12 patches that read attention scores must follow the same discipline.**
+
+### What we found — the cache is mostly empty
+
+**94.6% of cached tokens are "dead"** (receive less than 1% of their layer's attention budget). Stable across all 17 prompts (std 1.1%, range 92.3-96.7%). The cache is dominated by very few positions.
+
+**Per-layer dead rate ordering** (sorted by eviction headroom):
+
+| Most-dead (safest to evict) | Dead % | Least-dead (densest cache) | Dead % |
+|---|---|---|---|
+| L1 | 98.9% | L8 | 87.3% |
+| L2 | 98.8% | L7 | 87.8% |
+| L3 | 98.4% | L9 | 88.1% |
+| L13 | 97.9% | L6 | 91.5% |
+| L4 | 97.3% | L0 | 93.1% |
+
+### Cross-validation with Track A — independent agreement
+
+The "least-dead" cache layers (L7, L8, L9) overlap with **Day 6's hardest-to-remove single layers** (L7 = 53% exact match, L11 = 41%, L9 = 59%). Two completely different methodologies converging:
+
+- Track A (ablation): "removing L8 breaks 35% of prompts"
+- Track B (cache profile): "L8's cache has the densest attention pattern (lowest dead rate at 87.3%)"
+
+Both say: **L7-L9 are doing real work and need their cache intact.**
+
+### Attention sinks — confirmed strong, must preserve
+
+The BOS token (position 0) receives **43-81% of attention per layer**. L2 has 81.4% concentrated at position 0; L1 has 74.5%. Even L0 has 43.1%. This is THE attention sink described in the StreamingLLM paper, and it's strong on Llama 3.2 1B.
+
+**Implication for Day 10-12:** position 0 (and probably positions 0-3 for safety) MUST stay in cache. Evicting them collapses the model. Window-only eviction will hurt; sink + window is the safe baseline.
+
+### Memory framing (the awkward truth at the 1B scale)
+
+At our sequence lengths (~100 tokens), the KV cache is **0.1% of total memory**. Even at 4000 tokens it's only 5%. Model weights (2.36 GB) dominate.
+
+**Implication:** at the 1B scale, **Track B's value is compute savings per generation step, not memory savings.** Each evicted cached token reduces one row of the attention matmul per step. For a 4000-token sequence with 95% eviction, we compute 200 K/V rows instead of 4000 — a 20× attention compute reduction per step. For 70B-class models at 100k+ context, the same technique buys huge memory savings too.
+
+### What Day 10-12 patches will look like (Day 9 priors)
+
+- **Day 10 (sink + window)** — keep positions 0-3 always; keep last N tokens. With 95% dead rate, N ≈ 25% of cache should work well.
+- **Day 11 (per-layer sizing)** — L1, L2, L3 get tiny windows (10-20 tokens). L7-L9 get bigger windows (50-100 tokens). This is exactly the eviction-headroom signal Day 9 surfaces.
+- **Day 11 (importance eviction)** — instead of keeping by recency, keep cached tokens with highest cumulative attention received. Day 9's `attn_received` array IS this signal; Day 11 just needs to track it live during generation.
+
+### Saved data for Day 10-12 to consume
+- `outputs/cache_profiles/day9_canonical_attention.npz` — per-layer × per-position attention for the canonical prompt; heatmap; prompt_len.
+- `outputs/cache_profiles/day9_per_layer_attention.csv` — avg + std dead-rate per layer across 17 prompts.
+
+### Updated patch verification kit (post-Day 9)
+
+The kit from Days 5-8 still applies. Day 9 adds:
+
+- **Cache attention preservation check** — after running a patch, recompute per-layer dead rate using `profile_prompt()`. If a patch breaks the model, you'll typically see either (a) dead rate flips to ~0% (attention spreads uniformly = degenerate) or (b) repetition rate spikes (model lost access to sink).
+- **Sink budget check** — after eviction, verify position 0 is still in cache for every layer. Forgetting to preserve the sink is the most common Day 10-12 bug.
+
+---
+
+## Day 10 (May 19) — Between-step cache trimming, no monkey-patching needed (yet)
+
+### What we built
+`src/kv_optimization/token_reducer.py` — two eviction strategies + sink verification across 17 prompts. **Crucial finding for monkey-patching planning:** we got both strategies working **without** actually monkey-patching `LlamaAttention.forward()`. The trick was to mutate the DynamicCache between generation steps instead of inside the attention forward.
+
+### Implementation pattern: between-step cache mutation
+
+```python
+def trim_cache(past_kv, keep_first: int, keep_last: int):
+    """Keep first K + last N positions per layer. Drop the middle."""
+    for layer in past_kv.layers:
+        K, V = layer.keys, layer.values
+        seq_len = K.shape[-2]
+        if seq_len <= keep_first + keep_last:
+            continue
+        layer.keys = torch.cat([K[..., :keep_first, :], K[..., -keep_last:, :]], dim=-2)
+        layer.values = torch.cat([V[..., :keep_first, :], V[..., -keep_last:, :]], dim=-2)
+```
+
+Then in the generation loop:
+```python
+out = model(input_ids=next_token, past_key_values=past_kv, use_cache=True)
+past_kv = out.past_key_values
+trim_cache(past_kv, keep_first=4, keep_last=budget - 4)  # ← between-step mutation
+next_token = out.logits[0, -1].argmax().view(1, 1)
+```
+
+**Why this works without re-applying RoPE:**
+- Cached K vectors retain the RoPE they got when generated → consistent
+- The new query's RoPE position is computed by transformers as `past_kv.get_seq_length() + step`. After trim, this gives the new query a position equal to the *trimmed* seq length, not the *original* seq length.
+- This is equivalent to **StreamingLLM's positional shift**: kept tokens get re-indexed to consecutive positions from the model's POV. The math works because attention sinks absorb the position-shift weirdness.
+
+**Implication for Days 11-12:** if our advanced strategies (importance eviction, per-layer sizing) can also be expressed as "trim between steps," we don't need to monkey-patch the attention class at all. The Day 4 `monkeypatching.md` parking lot may stay parked. Monkey-patching only becomes necessary for techniques that need to alter the math *within* the attention forward (e.g., custom softmax, per-head sparsification).
+
+### What we found — sink is structural, sink-preservation is decisive
+
+**Sink verification across 17 prompts (mean BOS attention share per layer):**
+
+| Layer | Mean | Std | Layer | Mean | Std |
+|---|---|---|---|---|---|
+| L0 | 49.4% | 2.7 | L8 | 49.1% | 4.2 |
+| L1 | 76.2% | 1.6 | L9 | 48.2% | 3.9 |
+| L2 | **80.5%** | 2.8 | L10 | 60.4% | 6.1 |
+| L3 | 73.5% | 2.4 | L11 | 68.9% | 3.2 |
+| L4 | 65.8% | 2.4 | L12 | 69.4% | 4.3 |
+| L5 | 59.8% | 4.0 | L13 | 75.5% | 3.6 |
+| L6 | 53.3% | 4.2 | L14 | 70.8% | 3.2 |
+| L7 | 53.1% | 3.2 | L15 | 66.0% | 2.5 |
+
+Overall: **63.7%** of all attention goes to position 0 on average. Std is tight (2-6% per layer). **The sink is structural — it's not a property of any single prompt or any single layer; it's how this model routes attention.**
+
+### Eviction results — sink preservation matters at every budget
+
+| Strategy | Sink | Budget | Match% | Repetition |
+|---|---|---|---|---|
+| window-only | 0 | 100 (no-evict) | 100% | 0.49 |
+| window-only | 0 | 30 | 86.1% | 0.53 |
+| window-only | 0 | 20 | 50.2% | 0.62 |
+| window-only | 0 | 10 | 21.8% | 0.68 |
+| sink+window | 4 | 100 (no-evict) | 100% | 0.49 |
+| **sink+window** | **4** | **30** | **92.0%** | **0.50** |
+| sink+window | 4 | 20 | 63.5% | 0.49 |
+| sink+window | 4 | 10 | 24.1% | 0.50 |
+
+**Sink+window wins at every comparable budget.** Two complementary signals:
+1. **Match%**: sink+window gives +5.9pp at b=30, +13.3pp at b=20.
+2. **Repetition rate**: sink+window stays at 0.49-0.50; window-only climbs to 0.68. Losing the sink doesn't just degrade quality — **it sends the model into token loops.**
+
+### A surprise — the Day 6 top-1 metric is blind to eviction
+
+Day 10 had to introduce a new metric. Day 6's `evaluate()` computes "does the pruned model produce the same top-1 *first* generated token as baseline?" With eviction, the first generated token is unaffected because eviction kicks in only when the cache exceeds budget — which doesn't happen until later steps.
+
+**Step0Ok% was 100% for every config tested.** The eviction damage is in steps 5+, not step 0.
+
+**Day 10's new metric:** `match_pct = % of positions in a 30-token greedy generation that match the no-evict baseline`. This catches degradation that happens mid-sequence.
+
+**For Day 11-12 patches:** use 30-token match against baseline, NOT top-1 of first token. The verification kit gets an addition:
+- Day 5 KL Δ, Day 5 cosine sim — sensitive to representation drift
+- Day 6 exact match — sensitive to top-1 flips ON THE FIRST TOKEN (use only for non-eviction patches)
+- **Day 10 30-token match** — sensitive to mid-sequence degradation, the correct metric for eviction
+- Day 6 repetition rate — collapse canary, especially for sink-bypass bugs
+- Day 9 dead-rate / sink-attention check — sanity check that attention pattern still looks normal
+
+### Where the quality cliff is
+
+| Budget | Sink+window match% | Cache reduction |
+|---|---|---|
+| 100 | 100% | 0% (no eviction) |
+| 30 | 92.0% | ~25% of 40-token max cache |
+| 20 | 63.5% | ~50% |
+| 10 | 24.1% | ~75% |
+
+**The cliff is between budget=30 and budget=20.** Above 30, very good quality preservation. Below 30, things fall apart fast. At our test sequence lengths (~40 tokens max cache), budget=30 means we're saving ~25% memory and compute per step while keeping 92% match.
+
+For Day 11 to do better, **smarter eviction within the middle** is required. The "dead" tokens we identified in Day 9 are mostly in the middle of the cache. Importance-based eviction (track cumulative attention, drop bottom-K from the middle) should push the cliff lower.
+
+### Updated map of which approach to take for which patch
+
+| Patch type | Use this | Monkey-patch needed? |
+|---|---|---|
+| Trim cache by position (window, sink+window) | between-step `trim_cache` | NO |
+| Importance-based eviction by cumulative attention | between-step trim + cumulative tracking | NO (track via hooks or in the gen loop) |
+| Per-layer different budgets | between-step trim, layer-by-layer | NO |
+| KV cache INT8/INT4 quantization | between-step quantize on cache.keys/values | NO |
+| Custom attention math (uniform softmax, top-k attn) | rewrite forward | YES (Approach #3 from `monkeypatching.md`) |
+| Cache eviction *during* attention (look at scores) | rewrite forward | YES |
+
+**Most of Days 11-12 likely stays in the "no monkey-patching" column.** Day 12's combined-best strategy may still avoid full monkey-patching if we stack between-step techniques smartly.
+
+### Saved data for Day 11-12
+- `outputs/cache_profiles/day10_per_prompt_sink.csv` — per-prompt-per-layer BOS attention share. Day 11's per-layer cache sizing could combine this with Day 9's dead-rate data.
+- `outputs/cache_profiles/day10_eviction_results.csv` — strategy × budget quality, baseline for any Day 11-12 strategy comparison.
+
+---
+
+## Day 11 (May 19) — Importance eviction + quantization → **first technique that ACTUALLY needs monkey-patching**
+
+### What we built
+`src/kv_optimization/advanced_eviction.py` with three new techniques (one of which crashed and surfaced the first genuine monkey-patching requirement).
+
+### THE Day 11 monkey-patching finding
+
+**Per-layer cache sizing CRASHES with between-step trimming.** This is the first technique on this project that genuinely requires monkey-patching. The crash:
+
+```
+RuntimeError: The size of tensor a (11) must match the size of tensor b (12)
+at non-singleton dimension 3
+```
+
+In `eager_attention_forward`: `attn_weights = attn_weights + attention_mask`. Different cache lengths across layers → different `attn_weights` shapes → only one `attention_mask` exists → shape mismatch on the layer whose cache doesn't match the mask.
+
+**Why this breaks the "between-step mutation" pattern:**
+- `LlamaModel.forward()` computes ONE `cache_position` and ONE `causal_mask` for the whole stack
+- It assumes every layer's cache has the same length (because that's the normal case)
+- Our previous Day 10 trim always took every layer to the same budget — so this never surfaced
+
+**What it means for Day 12:** to make per-layer sizing work, we'll need to monkey-patch `LlamaAttention.forward()` (or `LlamaModel.forward()`'s mask construction) so each layer slices the attention mask to its own cache length. This is **Approach #3 from `monkeypatching.md`** — and we now have a real, motivating reason to use it, not just a hypothetical one.
+
+### Implementation pattern for Strategy 3 — Importance eviction
+
+`ImportanceState` class tracks cumulative attention per layer per cached position. Update after every forward, slice when we trim:
+
+```python
+class ImportanceState:
+    def __init__(self, num_layers):
+        self.cumulative = [np.zeros(0) for _ in range(num_layers)]
+
+    def update(self, attentions, kv_len):
+        for L, attn in enumerate(attentions):
+            received = attn.sum(dim=(0, 1, 2)).cpu().numpy()
+            # extend if cache grew, then accumulate
+            ...
+            self.cumulative[L][:kv_len] += received
+
+    def trim(self, past_kv, sink_size, recent_min, budget):
+        for L in range(self.num_layers):
+            keep = list(range(sink_size)) \
+                 + sorted(top_k_indices_from_middle(
+                       self.cumulative[L][sink_size:seq_len-recent_min],
+                       n=budget - sink_size - recent_min)) \
+                 + list(range(seq_len - recent_min, seq_len))
+            layer.keys = layer.keys[..., keep, :]
+            layer.values = layer.values[..., keep, :]
+            self.cumulative[L] = self.cumulative[L][keep]   # realign
+```
+
+**Critical detail:** when you trim by index list (not by slice), you MUST realign your tracking arrays to the new cache layout. Otherwise the cumulative scores point at the wrong positions on the next step.
+
+**For Day 12 patches** that track *anything* over generation steps (importance, dead time, age, attention entropy, etc.), use this same realignment pattern.
+
+### What we found — diminishing returns on smarter eviction
+
+Comparison at same budget:
+
+| Budget | sink+window (Day 10) | importance (Day 11) | Δ |
+|---|---|---|---|
+| 30 | 92.0% | 92.9% | +0.9pp |
+| 20 | 63.5% | 67.1% | +3.6pp |
+| 15 | (not tested) | 48.0% | — |
+
+**The gain is small.** At our short cache lengths (~40 tokens max), there's only ~16 "middle" positions to score. Most of them have similar (low) cumulative attention because the sink absorbs everything. Recency does most of the work.
+
+**Implication for the portfolio writeup:** importance-based eviction is a *known* technique from the literature (H2O, etc.) and should win bigger on longer sequences (1000+ tokens) where the middle pool is large enough for selection to matter. Our 1B / 30-gen-token setup is a stress test of the *floor* of the technique, not a showcase. Document this honestly.
+
+### Quantization — significant quality cost at the 1B scale
+
+| Precision | Match % | Repetition | Theoretical memory savings |
+|---|---|---|---|
+| FP16 (baseline) | 100% | 0.49 | 0% |
+| INT8 | **72.2%** | 0.41 | 50% |
+| INT4 | **16.9%** | 0.58 | 75% |
+
+INT8 round-trip costs **28 percentage points of generation quality** on the 1B model. INT4 is catastrophic — same coherence-loss pattern as Day 10's sink-eviction (repetition spike, near-random output).
+
+**Why this matters for monkey-patching plans:**
+- Naive per-tensor quantization doesn't survive on this model
+- To make INT8 work, we'd need **per-channel quantization** (separate scale per attention head) or **calibration-based quantization** (compute scales from a representative batch). Both involve more sophisticated cache-storage code.
+- **None of this needs monkey-patching the attention forward** — quantization stays a between-step operation. But the symmetric per-tensor approach we tried is too crude.
+
+### Verification kit update (post-Day 11)
+
+The new piece: **per-layer cache-shape consistency check.** Before any patch that touches cache shapes, verify all 16 layers have the same `cache.keys.shape[-2]` (or accept that you're committing to a monkey-patch). The most common Day 12 bug will be a partial trim that leaves shapes inconsistent.
+
+```python
+def assert_uniform_cache_shape(past_kv):
+    lens = [layer.keys.shape[-2] for layer in past_kv.layers]
+    assert len(set(lens)) == 1, f"non-uniform cache lengths: {lens}"
+```
+
+### Map of monkey-patching necessity — UPDATED for Day 11
+
+| Patch type | Approach | Monkey-patch needed? |
+|---|---|---|
+| Window, sink+window | between-step `trim_cache` | NO |
+| Importance-based eviction | between-step trim + cumulative tracking | NO |
+| **Per-layer different budgets** | **rewrite attention mask construction** | **YES** ← Day 11 confirmed |
+| KV cache INT8 (per-tensor) | between-step `quantize_cache` | NO |
+| KV cache INT4 (per-tensor) | between-step `quantize_cache` | NO (but quality bad) |
+| Per-channel quantization (per-head scale) | between-step with calibration | NO |
+| Custom attention math (uniform softmax, top-k attn) | rewrite forward | YES |
+| Cache eviction *during* attention (look at scores) | rewrite forward | YES |
+
+**Day 12 will be the first time we actually monkey-patch.** Strategy 4 (per-layer sizing) is the motivating reason. The `monkeypatching.md` parking-lot doc finally gets to be used.
+
+### Saved data for Day 12
+- `outputs/cache_profiles/day11_advanced_eviction.csv` — full results table for Day 12's comparison plot
+- Day 11 code reuses Day 10 and Day 9 modules cleanly — Day 12 should follow the same modular pattern (don't re-implement what Days 9-11 built)
+
